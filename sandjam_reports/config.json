@@ -1,0 +1,11 @@
+{
+  "app_id": "id6758755718",
+  "report_start": "2026-10-02",
+  "report_end": "2026-10-05",
+  "as_of_date": "2026-10-07",
+  "observation_end": "2026-10-06",
+  "ab_groups": ["0", "1", "2"],
+  "versions": [],
+  "coin_balance_resources": ["coin"],
+  "ads_denominator": "property"
+}

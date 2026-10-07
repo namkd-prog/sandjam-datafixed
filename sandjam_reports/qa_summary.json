@@ -1,0 +1,74 @@
+{
+  "status": "raw BI parity passed; corrected Parquet end-to-end chưa chạy",
+  "checked_at": "2026-10-07",
+  "bi_app_id": "id6758755718",
+  "bi_window_utc7": [
+    "2026-09-23",
+    "2026-10-06"
+  ],
+  "bi_mode": "default classic includes null/empty",
+  "bi_level_filter": [
+    1,
+    200
+  ],
+  "new_loss_levels_visible": [
+    3,
+    26
+  ],
+  "new_loss_levels_count": 24,
+  "loss_first_and_all_visible_cells": {
+    "checked": 240,
+    "matched": 240,
+    "metrics": [
+      "user_count",
+      "lose_count",
+      "bucket_0_10",
+      "churn_users_d3",
+      "churn_rate_d3_pct"
+    ]
+  },
+  "loss_first_full_buckets_levels": [
+    3,
+    14
+  ],
+  "loss_first_full_buckets_cells": {
+    "checked": 144,
+    "matched": 144
+  },
+  "data_metrics_non_ads_levels": [
+    1,
+    10
+  ],
+  "data_metrics_non_ads_cells": {
+    "checked": 130,
+    "matched": 130
+  },
+  "churn_loss_definition": "numeric reconstruction, chưa có SQL phụ BI/Long xác nhận",
+  "package_engine": "DuckDB local corrected Parquet",
+  "sources": "Ảnh người dùng, SQL Long/BI và aggregate StarRocks QA; raw không đưa vào package",
+  "ads_property_common_denominator_cells": {
+    "checked": 30,
+    "matched": 30,
+    "levels": [
+      1,
+      10
+    ]
+  },
+  "ads_denominator": "property common denominator: total=Inter+Rewarded; khớp30ô ảnh, chưa có SQL nguồn BI xác nhận",
+  "local_runner_tests": {
+    "tests": 4,
+    "status": "passed",
+    "coverage": [
+      "corrected mode/cutoff",
+      "AB và mọi version/level",
+      "Loss first/all và lặp attempt1",
+      "late comeback",
+      "D7 censoring",
+      "spend/balance/ads",
+      "JSON string vs Struct",
+      "CSV/Excel3tabs và hashes",
+      "reject raw/bad mode fix",
+      "không ghi đè output"
+    ]
+  }
+}
