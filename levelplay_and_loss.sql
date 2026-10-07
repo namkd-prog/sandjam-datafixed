@@ -40,7 +40,12 @@ FROM raw_fixed_input r WHERE app_id='id6758755718';
 -- 02. Ngay UTC+7, level/phase theo BI, mode cho gameplay va Ads/IAP.
 CREATE OR REPLACE TEMP VIEW normalized_events AS
 SELECT *, DATE(ts_utc + INTERVAL 7 HOURS) AS local_date,
- CASE WHEN event_name IN ('paid_ad_impression','in_app_purchase','in_app_purchase_v2','app_remove')
+ CAST(CASE WHEN INSTR(get_json_object(user_properties,'$.level'),'.')>1
+ THEN REPLACE(get_json_object(user_properties,'$.level'),'.1','')
+ WHEN property_phase>1 THEN CONCAT(CAST(CAST(property_level AS INT) AS STRING),'.',CAST(property_phase AS STRING))
+ ELSE get_json_object(user_properties,'$.level') END AS DOUBLE) AS property_bi_level,
+ CASE WHEN property_mode='classic' AND ts_utc>first_clear_650_ts THEN 'sl' ELSE property_mode END AS property_mode_fixed,
+ CASE WHEN event_name IN ('paid_ad_impression','in_app_purchase','app_remove')
  THEN CAST(CASE WHEN INSTR(get_json_object(user_properties,'$.level'),'.')>1
  THEN REPLACE(get_json_object(user_properties,'$.level'),'.1','')
  WHEN property_phase>1 THEN CONCAT(CAST(CAST(property_level AS INT) AS STRING),'.',CAST(property_phase AS STRING))
@@ -50,7 +55,7 @@ SELECT *, DATE(ts_utc + INTERVAL 7 HOURS) AS local_date,
  WHEN event_phase>1 THEN CONCAT(CAST(CAST(raw_level AS INT) AS STRING),'.',CAST(event_phase AS STRING))
  ELSE get_json_object(event_params,'$.level') END AS DOUBLE) END AS level,
  -- Ads/IAP use user_properties.mode in the source BI query. Apply the same cutoff.
- CASE WHEN event_name IN ('paid_ad_impression','in_app_purchase','in_app_purchase_v2','app_remove')
+ CASE WHEN event_name IN ('paid_ad_impression','in_app_purchase','app_remove')
  THEN CASE WHEN property_mode='classic' AND ts_utc>first_clear_650_ts THEN 'sl' ELSE property_mode END
  ELSE mode_fixed END AS metric_mode
 FROM parsed_events;
@@ -93,7 +98,7 @@ GROUP BY x.variant,x.level;
 CREATE OR REPLACE TEMP VIEW metric_events AS
 SELECT e.* FROM ab_classic_events e CROSS JOIN report_config c
 WHERE level BETWEEN c.level_min AND c.level_max
- AND CASE WHEN event_name IN ('in_app_purchase','in_app_purchase_v2','app_remove') THEN property_phase IS NULL OR property_phase<=1
+ AND CASE WHEN event_name IN ('in_app_purchase','app_remove') THEN property_phase IS NULL OR property_phase<=1
  WHEN event_name='paid_ad_impression' THEN TRUE ELSE event_phase IS NULL OR event_phase<=1 END;
 
 -- 09. Coin spend/total spend, booster, impressions, rewarded, AVG completion.
@@ -113,7 +118,17 @@ FROM metric_events GROUP BY variant,level;
 CREATE OR REPLACE TEMP VIEW pay_counts AS
 SELECT e.variant,e.level,COUNT(DISTINCT e.user_pseudo_id) AS payers FROM metric_events e
 JOIN starts s ON e.variant=s.variant AND e.level=s.level AND e.user_pseudo_id=s.user_pseudo_id
-WHERE e.event_name IN ('in_app_purchase','in_app_purchase_v2') GROUP BY e.variant,e.level;
+WHERE e.event_name='in_app_purchase' GROUP BY e.variant,e.level;
+
+-- IMP/LAU and Rwd/LAU source query uses user_properties level/mode for BOTH
+-- impression numerator and level_start denominator. Do not reuse gameplay starters.
+CREATE OR REPLACE TEMP VIEW ad_start_counts AS
+SELECT variant,property_bi_level AS level,COUNT(DISTINCT user_pseudo_id) AS users
+FROM system_clean e CROSS JOIN report_config c
+WHERE event_name='level_start' AND local_date BETWEEN c.report_start AND c.report_end
+ AND ARRAY_CONTAINS(c.versions,app_version) AND variant IN ('0','1','2')
+ AND property_mode_fixed='classic' AND property_bi_level BETWEEN c.level_min AND c.level_max
+GROUP BY variant,property_bi_level;
 
 -- 11. APS: weighted average start_count theo distinct user win o moi attempt.
 CREATE OR REPLACE TEMP VIEW aps AS
@@ -202,13 +217,14 @@ SELECT c.variant AS ab_group,c.level,c.user_start_count,
  COALESCE(s.booster_count,0)*1.0/c.user_start_count AS avg_booster_per_user,
  COALESCE(s.booster_users,0)*100.0/c.user_start_count AS booster_usage_rate_pct,
  COALESCE(p.payers,0)*100.0/c.user_start_count AS pay_rate_pct,
- COALESCE(s.impressions,0)*1.0/c.user_start_count AS imp_per_lau,
- COALESCE(s.reward_impressions,0)*1.0/c.user_start_count AS rwd_per_lau
+ COALESCE(COALESCE(s.impressions,0)*1.0/NULLIF(ad.users,0),0) AS imp_per_lau,
+ COALESCE(COALESCE(s.reward_impressions,0)*1.0/NULLIF(ad.users,0),0) AS rwd_per_lau
 FROM start_counts c
 LEFT JOIN drop_counts d ON c.variant=d.variant AND c.level=d.level
 LEFT JOIN level_stats s ON c.variant=s.variant AND c.level=s.level
 LEFT JOIN aps a ON c.variant=a.variant AND c.level=a.level
 LEFT JOIN pay_counts p ON c.variant=p.variant AND c.level=p.level
+LEFT JOIN ad_start_counts ad ON c.variant=ad.variant AND c.level=ad.level
 LEFT JOIN balance_starters bs ON c.variant=bs.variant AND c.level=bs.level
 LEFT JOIN balance_sums b ON c.variant=b.variant AND c.level=b.level
 LEFT JOIN churn_counts d3 ON c.variant=d3.variant AND c.level=d3.level AND d3.n=3

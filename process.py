@@ -12,6 +12,7 @@ def run(spark, cfg):
     from pyspark.sql import functions as F
     from pyspark.sql.types import StringType, MapType, StructType
     spark.conf.set('spark.sql.session.timeZone', 'UTC')
+    spark.conf.set('spark.sql.ansi.enabled', 'false')
     source = cfg['source']
     options = dict(source.get('options', {}))
     if source['format'] == 'csv':

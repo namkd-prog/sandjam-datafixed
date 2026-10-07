@@ -24,7 +24,10 @@ def run(spark,args):
         raise ValueError('Empty input')
     # Maximum date is only a bound, not proof of complete source coverage.
     if args.observation_end:
-        observation_end=datetime.strptime(args.observation_end,'%Y-%m-%d').date()
+        declared_end=datetime.strptime(args.observation_end,'%Y-%m-%d').date()
+        if declared_end>observation_end:
+            raise ValueError('--observation-end exceeds the latest date present in raw input')
+        observation_end=declared_end
     config=[(datetime.strptime(args.start,'%Y-%m-%d').date(),datetime.strptime(args.end,'%Y-%m-%d').date(),
              datetime.strptime(args.as_of,'%Y-%m-%d').date(),observation_end,
              args.level_min,args.level_max,args.versions.split(','),args.balance_resources.split(','))]
@@ -36,6 +39,15 @@ def run(spark,args):
             spark.sql(statement)
         except Exception as exc:
             raise RuntimeError(f'SQL statement {number} failed:\n{statement}\n') from exc
+    qa=spark.sql('''SELECT event_name,
+        COUNT(*) AS classic_events_with_missing_clear650,
+        COUNT(DISTINCT user_pseudo_id) AS affected_users
+        FROM ab_classic_events
+        WHERE property_level>650 AND first_clear_650_ts IS NULL
+        GROUP BY event_name''')
+    qa.coalesce(1).write.mode('errorifexists').option('header','true').csv(args.output.rstrip('/')+'/qa_missing_clear650_csv')
+    if qa.limit(1).count():
+        print('WARNING: post650 classic events lack historical clear650. See qa_missing_clear650_csv. Reports retain them under the agreed cutoff-only rule.',flush=True)
     for name in ('levelplay_report','loss_report'):
         result=spark.table(name).orderBy('ab_group','level')
         result.write.mode('errorifexists').parquet(args.output.rstrip('/')+'/'+name)

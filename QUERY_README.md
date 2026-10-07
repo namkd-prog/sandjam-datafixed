@@ -20,7 +20,7 @@ Mặc định app id6758755718, ngày 02–05/10/2026, experiment firebase_exp_a
 - Coin/Total Coin Spend: SUM value_game_currency chỉ currency coin / mọi currency; mẫu số user level_start.
 - Balance: số dư không âm ở level_start_turn start_count=1; mẫu số distinct user level_start_turn ở mọi attempt. Total gồm coin/ticket/key chứa booster, trừ use_booster_count.
 - APS: trung bình có trọng số start_count theo số distinct winning user trong mỗi start_count trên level_end.
-- Booster/Pay/Ads: booster spend value, user dùng booster trên level_end_turn, payer in_app_purchase hoặc in_app_purchase_v2 giao với starters, đếm distinct user nên không trùng khi có cả hai event; impression paid_ad_impression, rewarded format reward/video (inter ưu tiên). Pay Rate đã mở rộng v2 theo xác nhận mới; system purchase-outlier filter giữ phạm vi event của query BI gốc.
+- Booster/Pay/Ads: booster spend value, user dùng booster trên level_end_turn, payer in_app_purchase giao với starters. Game này không có in_app_purchase_v2 trong lịch sử 01/04–06/10/2026 đã query kiểm tra; đã bỏ v2 khỏi logic report. Impression paid_ad_impression, rewarded format reward/video (inter ưu tiên). Mẫu số IMP/LAU và Rwd/LAU là user level_start đọc level/mode từ user_properties theo query BI gốc, không dùng lại mẫu số gameplay đọc event_params.
 - Loss: level_end_turn, success=false, completion nonnull, start_count=1. Bucket đếm distinct user / distinct losing user; tổng % có thể >100 vì một user xuất hiện ở nhiều bucket. Giữ cách bucket của query gốc, không tự loại completion ngoài 0–100.
 
 ## Mode và raw
@@ -35,4 +35,6 @@ Người dùng đã xác nhận hai cột mang tên D3 trong Loss là drop rate.
 
 Ngày 07/10/2026: D3 chỉ có thể dùng play_date tới 03/10 nếu đã đủ activity; D7 chưa có ngày đủ quan sát trong 02–05/10, trả NULL. Muốn đủ cả period cần bổ sung activity đến hết 08/10 (D3), 12/10 (D7), theo T-1 chạy từ 09/10, 13/10. Không lọc activity comeback theo mode/level/variant; vẫn giữ filter version và system theo query nguồn.
 
-Đã kiểm tra cú pháp Python. Máy hiện tại không có Spark nên chưa kiểm chứng chạy end-to-end script Spark SQL; không xem các kết quả StarRocks cũ là kết quả của script này.
+Đã kiểm tra Python và chạy 24 câu Spark SQL trên PySpark 3.5.3 với 369 dòng raw mẫu thực tế lấy từ StarRocks. Đối chiếu cùng sample giữa hai engine; chi tiết ở SQL_AUDIT.md. Đây là kiểm chứng SQL trên sample, chưa phải chạy toàn bộ export raw hay kiểm chứng connector S3/HDFS/ADLS và ghi report trên cluster đích.
+
+Audit StarRocks ngày 07/10/2026 phát hiện user đã có progression>650 nhưng không có clear650 đúng điều kiện trong lịch sử 01/04–06/10. Giữ rule cutoff-only đã chốt, không tự suy cutoff hoặc loại user. Runner xuất `qa_missing_clear650_csv` và cảnh báo; cần kiểm tra/bổ sung lịch sử trước khi coi report đã loại hết loop. Event bị thiếu mode/level cũng giữ nguyên trong raw nhưng không vào metric strict classic. Lần start 1 bị lặp vẫn cộng theo SQL nguồn, không tự deduplicate.

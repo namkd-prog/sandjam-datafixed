@@ -11,7 +11,7 @@ class SqlStatementsTest(unittest.TestCase):
 
     def test_actual_script(self):
         statements=split_sql(Path(__file__).with_name('levelplay_and_loss.sql').read_text(encoding='utf-8'))
-        self.assertEqual(len(statements),23)
+        self.assertEqual(len(statements),24)
         self.assertTrue(all(s.startswith(('CREATE OR REPLACE TEMP VIEW','SELECT')) for s in statements))
 
 if __name__=='__main__':
