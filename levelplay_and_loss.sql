@@ -188,10 +188,8 @@ SELECT *,CASE WHEN completion<10 THEN 0 WHEN completion<20 THEN 1 WHEN completio
  WHEN completion<70 THEN 6 WHEN completion<80 THEN 7 WHEN completion<90 THEN 8 ELSE 9 END AS bucket
 FROM metric_events WHERE event_name='level_end_turn' AND success='false' AND attempt=1 AND completion IS NOT NULL;
 
-CREATE OR REPLACE TEMP VIEW loss_report AS
+CREATE OR REPLACE TEMP VIEW loss_distribution AS
 SELECT variant AS ab_group,level,COUNT(DISTINCT user_pseudo_id) AS user_count,COUNT(*) AS lose_count,
- -- The supplied Loss SQL does not define these two columns. Do not invent cohort mapping.
- CAST(NULL AS BIGINT) AS churn_users_d3,CAST(NULL AS DOUBLE) AS churn_rate_d3_pct,
  COUNT(DISTINCT CASE WHEN bucket=0 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `0-10`,
  COUNT(DISTINCT CASE WHEN bucket=1 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `10-20`,
  COUNT(DISTINCT CASE WHEN bucket=2 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `20-30`,
@@ -203,6 +201,18 @@ SELECT variant AS ab_group,level,COUNT(DISTINCT user_pseudo_id) AS user_count,CO
  COUNT(DISTINCT CASE WHEN bucket=8 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `80-90`,
  COUNT(DISTINCT CASE WHEN bucket=9 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `90-100`
 FROM losses GROUP BY variant,level;
+
+-- User-confirmed Loss mapping: these legacy D3 labels represent ordinary drop rate,
+-- not Non Return Rate and not a denominator limited to first-attempt losers.
+CREATE OR REPLACE TEMP VIEW loss_report AS
+SELECT l.ab_group,l.level,l.user_count,l.lose_count,
+ COALESCE(d.dropped_users,0) AS churn_users_d3,
+ COALESCE(d.dropped_users,0)*100.0/NULLIF(c.user_start_count,0) AS churn_rate_d3_pct,
+ l.`0-10`,l.`10-20`,l.`20-30`,l.`30-40`,l.`40-50`,
+ l.`50-60`,l.`60-70`,l.`70-80`,l.`80-90`,l.`90-100`
+FROM loss_distribution l
+LEFT JOIN start_counts c ON l.ab_group=c.variant AND l.level=c.level
+LEFT JOIN drop_counts d ON l.ab_group=d.variant AND l.level=d.level;
 
 SELECT * FROM levelplay_report ORDER BY ab_group,level;
 SELECT * FROM loss_report ORDER BY ab_group,level;

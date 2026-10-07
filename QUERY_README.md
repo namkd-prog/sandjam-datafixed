@@ -27,9 +27,9 @@ Giữ nguyên raw và level ID. Gameplay/currency dùng mode_fixed. Query BI g�
 
 Giữ các system filter đã có trong nguồn SQL (China android, balance lớn, purchase outlier, earn âm). Chưa có danh sách experiment Internal của app để tái lập filter Exclude pre-publish; không tự coi debug_event=1 là playtest. Nếu BI áp filter này cần bổ sung đúng IDs. Raw không bị loại bởi các filter report.
 
-## Còn thiếu xác nhận
+## Churn trong bảng Loss
 
-`loss_report.churn_users_d3` và `churn_rate_d3_pct` để NULL: query Loss đã gửi không chứa hai cột này, chưa xác nhận chúng lấy churn toàn level hay cohort người thua start 1. Không tự gán cùng một rate cho hai cohort.
+Người dùng đã xác nhận hai cột mang tên D3 trong Loss là drop rate. `churn_users_d3` đếm distinct user start X nhưng không start X+1; `churn_rate_d3_pct` chia số đó cho distinct user start X, nhân 100. Dùng cùng variant, period, mode và filter report. Mẫu số không phải user thua start 1. Giữ tên cột để khớp bảng BI nhưng metric này không dùng cửa sổ 3 ngày. Loss counts/buckets vẫn chỉ xét thua start_count=1. Churn trong Levelplay giữ nguyên công thức trước: Churn Rate là drop rate, D3/D7 là Non Return Rate.
 
 Ngày 07/10/2026: D3 chỉ có thể dùng play_date tới 03/10 nếu đã đủ activity; D7 chưa có ngày đủ quan sát trong 02–05/10, trả NULL. Muốn đủ cả period cần bổ sung activity đến hết 08/10 (D3), 12/10 (D7), theo T-1 chạy từ 09/10, 13/10. Không lọc activity comeback theo mode/level/variant; vẫn giữ filter version và system theo query nguồn.
 
