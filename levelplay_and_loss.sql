@@ -113,7 +113,7 @@ FROM metric_events GROUP BY variant,level;
 CREATE OR REPLACE TEMP VIEW pay_counts AS
 SELECT e.variant,e.level,COUNT(DISTINCT e.user_pseudo_id) AS payers FROM metric_events e
 JOIN starts s ON e.variant=s.variant AND e.level=s.level AND e.user_pseudo_id=s.user_pseudo_id
-WHERE e.event_name='in_app_purchase' GROUP BY e.variant,e.level;
+WHERE e.event_name IN ('in_app_purchase','in_app_purchase_v2') GROUP BY e.variant,e.level;
 
 -- 11. APS: weighted average start_count theo distinct user win o moi attempt.
 CREATE OR REPLACE TEMP VIEW aps AS

@@ -20,7 +20,7 @@ Mặc định app id6758755718, ngày 02–05/10/2026, experiment firebase_exp_a
 - Coin/Total Coin Spend: SUM value_game_currency chỉ currency coin / mọi currency; mẫu số user level_start.
 - Balance: số dư không âm ở level_start_turn start_count=1; mẫu số distinct user level_start_turn ở mọi attempt. Total gồm coin/ticket/key chứa booster, trừ use_booster_count.
 - APS: trung bình có trọng số start_count theo số distinct winning user trong mỗi start_count trên level_end.
-- Booster/Pay/Ads theo SQL workbook: booster spend value, user dùng booster trên level_end_turn, payer in_app_purchase giao với starters; impression paid_ad_impression, rewarded format reward/video (inter ưu tiên).
+- Booster/Pay/Ads: booster spend value, user dùng booster trên level_end_turn, payer in_app_purchase hoặc in_app_purchase_v2 giao với starters, đếm distinct user nên không trùng khi có cả hai event; impression paid_ad_impression, rewarded format reward/video (inter ưu tiên). Pay Rate đã mở rộng v2 theo xác nhận mới; system purchase-outlier filter giữ phạm vi event của query BI gốc.
 - Loss: level_end_turn, success=false, completion nonnull, start_count=1. Bucket đếm distinct user / distinct losing user; tổng % có thể >100 vì một user xuất hiện ở nhiều bucket. Giữ cách bucket của query gốc, không tự loại completion ngoài 0–100.
 
 ## Mode và raw
