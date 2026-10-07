@@ -11,13 +11,17 @@ Folder độc lập, có thể copy nguyên folder vào Git của Nam. Chỉ ch�
 ```bash
 cd sandjam_reports
 python -m pip install -r requirements.txt
-python run_reports.py --input /path/to/raw_fixed --output /path/to/sandjam_output_20261007
+python run_reports.py --input /path/to/raw_fixed --output /path/to/sandjam_output_20261007 \
+  --memory-limit 64GB --threads 8 --work-dir /path/to/local_ssd/sandjam_tmp
 ```
 
-4. Thành công phải in `COMPLETE`, có 3 CSV + Excel3 tab + `data_readme.md` + `manifest.json` với `status=complete`. Nếu thiếu cột mode_fixed/cutoff, quay lại output process của Nam; **không tự tạo mode_fixed từ raw mode để vượt kiểm tra**.
-5. D7 của report 02–05/10 đang N/A vì chưa đủ tuổi; không đổi thành 0. Hai caveat công thức cần giữ khi bàn giao: Loss Churn là reconstruction khớp ảnh, mẫu số ads theo property là candidate; chi tiết ở data_readme.
+**Chỉnh RAM theo máy chị DE:** ví dụ64GB chỉ dành cho máy có ít nhất128GB RAM và đủ trống; máy64GB dùng32GB. Default8GB/4 thread chỉ là fallback. Bảng RAM/thread và hướng dẫn chi tiết trong [README tối ưu](sql_optimized/README.md#ram-và-cpu--máy-de-nên-chỉnh).
 
-JSON NULL/rỗng/sai cú pháp **không chặn job**, không cần lọc/xóa các dòng `app_loading` thiếu params. Runner đọc giá trị không parse được thành NULL, giữ dòng và Parquet gốc; không quét toàn history để kiểm JSON. Các kiểm tra schema, timestamp, coverage và corrected mode vẫn giữ.
+4. Thành công phải in `COMPLETE`, có 3 CSV + Excel3 tab + `data_readme.md` + `manifest.json` với `status=complete`. Nếu thiếu cột mode_fixed/cutoff, quay lại output process của Nam; **không tự tạo mode_fixed từ raw mode để vượt kiểm tra**.
+5. **Bản tối ưu là mặc định**, dùng SQL ở [`sql_optimized/`](sql_optimized/README.md). Input chỉ stage một lần theo report/observation; nên thêm `--work-dir /path/to/local_ssd/sandjam_tmp` nếu có SSD.
+6. D7 của report 02–05/10 đang N/A vì chưa đủ tuổi; không đổi thành 0. Hai caveat công thức cần giữ khi bàn giao: Loss Churn là reconstruction khớp ảnh, mẫu số ads theo property là candidate; chi tiết ở data_readme.
+
+JSON NULL/rỗng/sai cú pháp **không chặn job**, không cần lọc/xóa các dòng `app_loading` thiếu params. Runner đọc giá trị không parse được thành NULL, giữ dòng và Parquet gốc; không quét toàn history để kiểm JSON. Giữ kiểm schema, input window/coverage và corrected mode trong window; bản tối ưu không audit toàn history. Xem scope QA trong README tối ưu.
 
 ## Input, cấu hình và output
 
@@ -49,20 +53,9 @@ python run_reports.py --input /path/to/raw_fixed --output /path/to/new_output \
   --memory-limit 4GB --threads 4 --row-cap 20000
 ```
 
-SQL tách theo công việc, chạy tuần tự:
+SQL mặc định nằm trong [`sql_optimized/`](sql_optimized/README.md), có README riêng giải thích stage, cache, SSD, phạm vi QA và log hiệu năng. `sql/` là bản cũ để đối chiếu qua `--sql-mode legacy`; các công thức giữ nguyên. Đây là cú pháp **DuckDB**, không paste thẳng vào Spark/StarRocks.
 
-| File | Công việc |
-|---|---|
-| sql/00_normalize.sql | Parse JSON, timezone, fixed mode, system/report filters |
-| sql/01_starts_and_ads.sql | Starters, ordinary drop, property starters cho Inter |
-| sql/02_completion_resources.sql | APS, completion, spend/balance, booster, pay, ads |
-| sql/03_non_return.sql | Mature windows và Data Metrics Non Return D3/D7 |
-| sql/04_loss.sql | First/all distribution và auxiliary Churn Loss |
-| sql/05_reports.sql | Ghép các cột thành3 output |
-
-Đây là cú pháp **DuckDB**, không paste thẳng vào Spark/StarRocks. `run_reports.py` tạo input/config view, date macros, render placeholder và cache chỉ window report/observation, dùng disk spill khi cần.
-
-Đã kiểm số raw BI và kiểm runner bằng Parquet giả lập; chưa chạy dữ liệu corrected thật vì nằm trên máy DE. QA chính và giới hạn nguồn công thức ở `data_readme.md`. Khi Long cung cấp SQL phụ, phần cần đối chiếu là `loss_churn_counts` trong04 và `property_starters`/ads trong01/05; không cần mò cả pipeline.
+Đã kiểm số raw BI và runner bằng Parquet giả lập; chưa benchmark corrected data 143GB trên máy DE. QA công thức và giới hạn nguồn ở `data_readme.md`. Khi Long cung cấp SQL phụ, đối chiếu `loss_churn_counts` trong `sql_optimized/05_loss.sql` và `property_starters`/ads trong02/06.
 
 Kiểm package sau copy:
 

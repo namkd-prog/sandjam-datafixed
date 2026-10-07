@@ -56,7 +56,7 @@
   },
   "ads_denominator": "property common denominator: total=Inter+Rewarded; khớp30ô ảnh, chưa có SQL nguồn BI xác nhận",
   "local_runner_tests": {
-    "tests": 4,
+    "tests": 9,
     "status": "passed",
     "coverage": [
       "corrected mode/cutoff",
@@ -68,7 +68,28 @@
       "JSON string vs Struct",
       "CSV/Excel3tabs và hashes",
       "reject raw/bad mode fix",
-      "không ghi đè output"
+      "không ghi đè output",
+      "optimized/legacy CSV byte parity",
+      "UTC boundaries and native/string timestamps",
+      "one source scan plan; source removed before remaining stages",
+      "external SSD work directory cleanup"
     ]
+  },
+  "performance_optimization": {
+    "default_mode": "optimized",
+    "sql_folder": "sql_optimized",
+    "parquet_data_scan_statements": 1,
+    "qa_scope": "report_start_through_observation_end_only",
+    "disk_backed_cache": true,
+    "synthetic_benchmark": {
+      "total_rows": 1062000,
+      "window_rows": 52000,
+      "legacy_seconds": 0.7718302760004008,
+      "optimized_seconds": 0.6210844369998085,
+      "csv_byte_parity": true,
+      "memory_limit": "1GB",
+      "threads": 2
+    },
+    "real_143gb_benchmark_run": false
   }
 }

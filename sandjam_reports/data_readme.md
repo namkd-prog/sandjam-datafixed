@@ -7,6 +7,7 @@ App `id6758755718`. Report **2026-10-02–2026-10-05**, ngày UTC+7, bao gồm h
 Input là **Parquet raw_fixed đã được process của Nam sửa**, không đọc/query StarRocks. Gameplay lọc `mode_fixed='classic'`;
 ads/IAP lấy `user_properties.mode` và áp cùng `first_clear_650_ts` để loại classic sau cutoff. Không sửa JSON hay level ID.
 JSON NULL/rỗng/sai cú pháp không chặn job: khi đọc, giá trị không parse được trở thành NULL; giữ nguyên dòng và Parquet gốc. Không quét toàn history để kiểm JSON. Metric cần field nào thì áp điều kiện field đó; session vẫn được giữ theo logic observation.
+Bản mặc định optimized: stage app/window một lần vào DuckDB trên đĩa; không audit toàn history. Chi tiết ở `sql_optimized/README.md`; source_qa.rows là số dòng window, không phải tổng nguồn.
 Chia theo `firebase_exp_abt_22`, nhóm 0/1/2. Version: mọi version. **Mọi level**, không giới hạn1–200.
 
 | File / tab Excel | Nội dung |

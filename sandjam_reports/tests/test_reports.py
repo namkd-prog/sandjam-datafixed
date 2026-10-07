@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 import run_reports as reports
 
 
-def fixture(path, bad_fix=False, missing_mode=False, nested=False, nullable_json=False):
+def fixture(path, bad_fix=False, missing_mode=False, nested=False, nullable_json=False, boundaries=False):
     import duckdb
     con = duckdb.connect()
     con.execute('''CREATE TABLE fixture(app_id VARCHAR,user_pseudo_id VARCHAR,event_ts TIMESTAMP,
@@ -49,6 +49,17 @@ def fixture(path, bad_fix=False, missing_mode=False, nested=False, nullable_json
     add('old', 'level_end', '2026-04-01', level=650, ab='1', params=dict(success=True), cutoff=cutoff)
     add('old', 'level_start', '2026-10-02', ab='1', mode='classic' if bad_fix else 'sl', cutoff=cutoff)
     add('old', 'paid_ad_impression', '2026-10-02', ab='1', mode=None, cutoff=cutoff, params=dict(ad_format='interstitial',mode=None))
+    if boundaries:
+        def edge(user, ts, name='level_start', level=400):
+            add(user,name,ts[:10],level=level)
+            rows[-1]=rows[-1][:2]+(ts,)+rows[-1][3:]
+        edge('before','2026-10-01 16:59:59')
+        edge('at_start','2026-10-01 17:00:00')
+        edge('last_report','2026-10-05 16:59:59',level=401)
+        edge('after_report','2026-10-05 17:00:00',level=402)
+        edge('at_start','2026-10-06 16:59:59',name='session_start')
+        edge('outside_observation','2026-10-06 17:00:00',name='session_start')
+        edge('future','2026-10-12 01:00:00',name='session_start')
     con.executemany('INSERT INTO fixture VALUES (?,?,?,?,?,?,?,?,?,?,?)', rows)
     if nullable_json:
         # An actual activity event must survive missing params/properties.
@@ -71,12 +82,12 @@ def fixture(path, bad_fix=False, missing_mode=False, nested=False, nullable_json
 
 
 class ReportsTest(unittest.TestCase):
-    def execute(self, tmp, **fixture_args):
+    def execute(self, tmp, sql_mode="optimized", config=None, work_dir=None, **fixture_args):
         src = Path(tmp) / 'raw_fixed.parquet'
         fixture(src, **fixture_args)
         dest = Path(tmp) / 'out'
-        args = SimpleNamespace(input=str(src),output=str(dest),config=str(ROOT/'config.json'),
-                               memory_limit='256MB',threads=1,row_cap=1000)
+        args = SimpleNamespace(input=str(src),output=str(dest),config=str(config or ROOT/'config.json'),sql_mode=sql_mode,
+                               memory_limit='256MB',threads=1,row_cap=1000,work_dir=work_dir)
         reports.run(args)
         return dest
 
@@ -137,9 +148,99 @@ class ReportsTest(unittest.TestCase):
             args=SimpleNamespace(input=str(Path(tmp2)/'raw_fixed.parquet'))
             reports.prepare_input(con,args,cfg)
             self.assertEqual(con.execute('SELECT COUNT(*) FROM raw_fixed_input').fetchone()[0],qa['rows'])
-            self.assertEqual(con.execute("SELECT COUNT(*) FROM raw_fixed_input WHERE event_name='app_loading'").fetchone()[0],3)
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM raw_fixed_input WHERE event_name='app_loading'").fetchone()[0],2)
             self.assertEqual(con.execute("SELECT COUNT(*) FROM raw_fixed_input WHERE event_name='session_start' AND event_params IS NULL AND user_properties IS NULL").fetchone()[0],1)
             con.close()
+
+    def test_optimized_legacy_parity_timezone_and_d7(self):
+        for nested,obs,asof,denom,versions in (
+                (False,'2026-10-06','2026-10-07','property',[]),
+                (True,'2026-10-06','2026-10-07','event',[]),
+                (False,'2026-10-12','2026-10-13','property',['9.9.9'])):
+            with self.subTest(nested=nested,obs=obs,denom=denom), tempfile.TemporaryDirectory() as tmp1, tempfile.TemporaryDirectory() as tmp2:
+                cfg=json.loads((ROOT/'config.json').read_text())
+                cfg.update(observation_end=obs,as_of_date=asof,ads_denominator=denom,versions=versions)
+                config=Path(tmp1)/'config.json';config.write_text(json.dumps(cfg))
+                fixture_args=dict(boundaries=True,nested=nested,nullable_json=not nested)
+                fast=self.execute(tmp1,config=config,**fixture_args)
+                old=self.execute(tmp2,sql_mode='legacy',config=config,**fixture_args)
+                for filename,_,_ in reports.OUTPUTS.values():
+                    self.assertEqual((fast/filename).read_bytes(),(old/filename).read_bytes())
+                with (fast/'data_metrics.csv').open(encoding='utf-8-sig') as f:
+                    data=list(csv.DictReader(f))
+                self.assertTrue(any(float(r['level'])==400 for r in data))
+                self.assertTrue(any(float(r['level'])==401 for r in data))
+                self.assertFalse(any(float(r['level'])==402 for r in data))
+                self.assertEqual(data[0]['churn_rate_d7_pct']=='N/A',obs=='2026-10-06')
+                meta=json.loads((fast/'manifest.json').read_text())
+                self.assertEqual(meta['sql_mode'],'optimized')
+                self.assertEqual(meta['source_qa']['parquet_data_scan_statements'],1)
+                self.assertTrue(meta['sql_timings'])
+                self.assertFalse((fast/'_work').exists())
+                self.assertFalse((fast/'_spill').exists())
+                plan=json.loads((fast/'sql_executed/source_scan_plan.json').read_text())
+                def nodes(items):
+                    for item in items:
+                        yield item
+                        yield from nodes(item.get('children',[]))
+                scans=[n for n in nodes(plan) if n['name'].strip()=='READ_PARQUET']
+                self.assertEqual(len(scans),1)
+                self.assertIn('event_ts',str(scans[0]['extra_info']))
+
+    def test_optimized_source_detached_after_normalization(self):
+        import duckdb
+        from lib.sql_statements import split_sql
+        with tempfile.TemporaryDirectory() as tmp:
+            src=Path(tmp)/'input.parquet';fixture(src,nullable_json=True,boundaries=True)
+            con=duckdb.connect();con.execute("SET TimeZone='UTC'")
+            cfg=json.loads((ROOT/'config.json').read_text())
+            con.execute('CREATE MACRO date_sub_days(d,n) AS CAST(d AS DATE)-CAST(n AS INTEGER)')
+            con.execute('CREATE MACRO date_add_days(d,n) AS CAST(d AS DATE)+CAST(n AS INTEGER)')
+            qa=reports.prepare_input(con,SimpleNamespace(input=str(src)),cfg)
+            self.assertEqual(qa['utc_start'],'2026-10-01 17:00:00')
+            self.assertEqual(qa['utc_end_exclusive'],'2026-10-06 17:00:00')
+            self.assertFalse(con.execute("SELECT COUNT(*) FROM raw_fixed_input WHERE event_ts<TIMESTAMP '2026-10-01 17:00:00' OR event_ts>=TIMESTAMP '2026-10-06 17:00:00'").fetchone()[0])
+            con.execute(reports.config_view(cfg))
+            for filename,text in reports.render_sql(cfg):
+                for statement in split_sql(text):
+                    con.execute(statement)
+                if filename=='01_normalize.sql':
+                    src.unlink()  # Remaining stages succeed even without the Parquet file.
+            for view in ('levelplay_report','loss_report'):
+                plan=con.execute('EXPLAIN SELECT * FROM '+view).fetchone()[1]
+                self.assertNotIn('READ_PARQUET',plan)
+                self.assertTrue(con.execute('SELECT COUNT(*) FROM '+view).fetchone()[0])
+            con.close()
+
+    def test_string_timestamp_input_matches_native(self):
+        import duckdb
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp=Path(tmp);native=self.execute(tmp)
+            con=duckdb.connect()
+            con.execute("COPY (SELECT * REPLACE(event_ts::VARCHAR AS event_ts,first_clear_650_ts::VARCHAR AS first_clear_650_ts) FROM read_parquet("+reports.literal(tmp/'raw_fixed.parquet')+")) TO "+reports.literal(tmp/'strings.parquet')+" (FORMAT PARQUET)")
+            con.close()
+            for mode in ('optimized','legacy'):
+                dest=tmp/('strings_'+mode)
+                args=SimpleNamespace(input=str(tmp/'strings.parquet'),output=str(dest),config=str(ROOT/'config.json'),
+                    memory_limit='256MB',threads=1,row_cap=1000,sql_mode=mode)
+                reports.run(args)
+                for filename,_,_ in reports.OUTPUTS.values():
+                    self.assertEqual((native/filename).read_bytes(),(dest/filename).read_bytes())
+                if mode=='optimized':
+                    meta=json.loads((dest/'manifest.json').read_text())
+                    self.assertFalse(meta['source_qa']['native_timestamp_filter'])
+
+    def test_external_work_directory_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work=Path(tmp)/'ssd'
+            self.execute(tmp,work_dir=str(work))
+            self.assertFalse(list(work.iterdir()))
+        with tempfile.TemporaryDirectory() as tmp:
+            work=Path(tmp)/'ssd'
+            with self.assertRaises(ValueError):
+                self.execute(tmp,work_dir=str(work),bad_fix=True)
+            self.assertFalse(list(work.iterdir()))
+            self.assertFalse((Path(tmp)/'out').exists())
 
     def test_input_must_be_corrected(self):
         for kwargs in (dict(missing_mode=True),dict(bad_fix=True)):

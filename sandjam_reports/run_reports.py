@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 import tempfile
+import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -57,19 +58,22 @@ def validate_config(cfg):
             raise ValueError(key + ' phải là list string.')
 
 
-def render_sql(cfg):
+def render_sql(cfg, sql_mode='optimized'):
     values = {'app_id': literal(cfg['app_id']),
               'variants': ','.join(literal(v) for v in cfg['ab_groups']),
               'ads_denominator': 'ps.users' if cfg['ads_denominator'] == 'property' else 'c.user_start_count'}
     result = []
-    for path in sorted((ROOT / 'sql').glob('*.sql')):
+    sql_folder = ROOT / ('sql_optimized' if sql_mode == 'optimized' else 'sql')
+    for path in sorted(sql_folder.glob('*.sql')):
+        if path.name == '00_stage_input.sql':
+            continue
         text = path.read_text(encoding='utf-8')
         for key, value in values.items():
             text = text.replace('{{' + key + '}}', value)
         if '{{' in text:
             raise ValueError('SQL còn placeholder: ' + path.name)
         # Cache chỉ các cửa sổ report/observation; không giữ toàn history trong RAM.
-        for view in ('ab_classic_events', 'metric_events', 'daily_sessions', 'churn_play_pre'):
+        for view in (() if sql_mode == 'optimized' else ('ab_classic_events', 'metric_events', 'daily_sessions', 'churn_play_pre')):
             text = text.replace('CREATE OR REPLACE TEMP VIEW ' + view + ' AS',
                                 'CREATE OR REPLACE TEMP TABLE ' + view + ' AS')
         result.append((path.name, text))
@@ -86,7 +90,7 @@ def config_view(cfg):
         {array(cfg['coin_balance_resources'])} AS coin_balance_resources'''
 
 
-def prepare_input(con, args, cfg):
+def prepare_input_legacy(con, args, cfg):
     path = Path(args.input).expanduser()
     if path.is_dir():
         pattern = str(path / '**/*.parquet')
@@ -135,6 +139,76 @@ def prepare_input(con, args, cfg):
                 invalid_timestamp=check[1], json_policy='tolerant_null_no_global_gate',
                 inconsistent_mode_fix=bad_fix,
                 input_schema={k: types[k] for k in sorted(REQUIRED)})
+
+
+def prepare_input(con, args, cfg):
+    if getattr(args, 'sql_mode', 'optimized') == 'legacy':
+        return prepare_input_legacy(con, args, cfg)
+    path = Path(args.input).expanduser()
+    pattern = str(path / '**/*.parquet') if path.is_dir() else str(path)
+    con.execute('CREATE TEMP VIEW parquet_source AS SELECT * FROM read_parquet(' + literal(pattern) + ', union_by_name=true, hive_partitioning=true)')
+    types = {row[0]: row[1] for row in con.execute('DESCRIBE parquet_source').fetchall()}
+    missing = REQUIRED - types.keys()
+    if missing:
+        raise ValueError('Input phải là raw_fixed Parquet đầy đủ; thiếu: ' + ', '.join(sorted(missing)))
+    if any(types[k] in ('BIGINT', 'INTEGER', 'DOUBLE', 'UBIGINT') for k in ('event_ts', 'first_clear_650_ts')):
+        raise ValueError('Timestamp phải là UTC timestamp/ISO string, không dùng epoch integer.')
+    selected = []
+    for name in sorted(REQUIRED):
+        quoted = '"' + name + '"'
+        if name in ('event_params', 'user_properties'):
+            typ = types[name]
+            if typ.startswith(('STRUCT', 'MAP')):
+                expr = 'to_json(' + quoted + ')::VARCHAR'
+            elif typ in ('VARCHAR', 'JSON'):
+                expr = quoted + '::VARCHAR'  # Defer tolerant parsing until relevant events.
+            else:
+                raise ValueError(name + ' cần JSON string/Map/Struct; GA4 arrays cần adapter.')
+        elif name in ('event_ts', 'first_clear_650_ts'):
+            expr = '(TRY_CAST(' + quoted + " AS TIMESTAMPTZ) AT TIME ZONE 'UTC')"
+        else:
+            expr = quoted + '::VARCHAR'
+        selected.append(expr + ' AS ' + quoted)
+    start = datetime.combine(date.fromisoformat(cfg['report_start']), datetime.min.time()) - timedelta(hours=7)
+    stop = datetime.combine(date.fromisoformat(cfg['observation_end']) + timedelta(days=1), datetime.min.time()) - timedelta(hours=7)
+    native_timestamp = types['event_ts'].startswith('TIMESTAMP')
+    timestamp_expr = 'event_ts' if native_timestamp else "(TRY_CAST(event_ts AS TIMESTAMPTZ) AT TIME ZONE 'UTC')"
+    bound_type = 'TIMESTAMPTZ' if types['event_ts'] == 'TIMESTAMP WITH TIME ZONE' else 'TIMESTAMP'
+    timestamp_filter = f"{timestamp_expr} >= {bound_type} {literal(start.isoformat(' '))} AND {timestamp_expr} < {bound_type} {literal(stop.isoformat(' '))}"
+    stage_sql = (ROOT / 'sql_optimized' / '00_stage_input.sql').read_text()
+    for key, value in {'input_columns': ','.join(selected), 'input_timestamp_filter': timestamp_filter,
+                       'app_id': literal(cfg['app_id'])}.items():
+        stage_sql = stage_sql.replace('{{' + key + '}}', value)
+    sql_dir = getattr(args, 'sql_dir', None)
+    if sql_dir is not None:
+        (Path(sql_dir) / '00_stage_input.sql').write_text(stage_sql, encoding='utf-8')
+        plan = con.execute('EXPLAIN (FORMAT JSON) ' + stage_sql).fetchone()[1]
+        (Path(sql_dir) / 'source_scan_plan.json').write_text(plan, encoding='utf-8')
+    print(f"INPUT optimized: UTC [{start}, {stop}); materialize once", flush=True)
+    if not native_timestamp:
+        print('INPUT timestamp dạng chuỗi: phải cast để lọc; Parquet có thể không prune row group theo thời gian.', flush=True)
+    started = time.monotonic()
+    con.execute(stage_sql)
+    stage_seconds = time.monotonic() - started
+    # All checks below scan the bounded local table, never the Parquet source again.
+    check = con.execute('''SELECT COUNT(*),COUNT(*) FILTER (WHERE event_ts IS NULL),
+      MIN(DATE(event_ts+INTERVAL 7 HOURS)),MAX(DATE(event_ts+INTERVAL 7 HOURS)) FROM raw_fixed_input''').fetchone()
+    if not check[0] or check[1]:
+        raise ValueError(f'Input trong window rỗng/timestamp không hợp lệ: rows={check[0]}, invalid_timestamp={check[1]}.')
+    if str(check[3]) < cfg['observation_end']:
+        raise ValueError('Input trong window chưa tới observation_end; kiểm partition ngày hoàn chỉnh với DE.')
+    bad_fix = con.execute('''SELECT COUNT(*) FROM raw_fixed_input
+      WHERE COALESCE(mode_fixed,'')<>'sl' AND event_ts>first_clear_650_ts
+      AND json_extract_string(TRY_CAST(event_params AS JSON),'$.mode')='classic' ''').fetchone()[0]
+    if bad_fix:
+        raise ValueError(f'Có {bad_fix} event original classic sau cutoff nhưng mode_fixed chưa là sl; kiểm lại bước process của Nam.')
+    print(f'INPUT cached: {check[0]:,} rows in {stage_seconds:.1f}s; subsequent SQL uses local tables', flush=True)
+    return dict(rows=check[0], min_date=str(check[2]), max_date=str(check[3]),
+                invalid_timestamp=check[1], json_policy='tolerant_null_no_global_gate',
+                inconsistent_mode_fix=bad_fix, input_schema={k: types[k] for k in sorted(REQUIRED)},
+                qa_scope='report_start_through_observation_end_only',
+                sql_mode='optimized', parquet_data_scan_statements=1, stage_seconds=stage_seconds,
+                native_timestamp_filter=native_timestamp, utc_start=start.isoformat(' '), utc_end_exclusive=stop.isoformat(' '))
 
 
 def export_csv(con, view, kind, destination, row_cap):
@@ -213,6 +287,7 @@ App `{cfg['app_id']}`. Report **{cfg['report_start']}–{cfg['report_end']}**, n
 Input là **Parquet raw_fixed đã được process của Nam sửa**, không đọc/query StarRocks. Gameplay lọc `mode_fixed='classic'`;
 ads/IAP lấy `user_properties.mode` và áp cùng `first_clear_650_ts` để loại classic sau cutoff. Không sửa JSON hay level ID.
 JSON NULL/rỗng/sai cú pháp không chặn job: khi đọc, giá trị không parse được trở thành NULL; giữ nguyên dòng và Parquet gốc. Không quét toàn history để kiểm JSON. Metric cần field nào thì áp điều kiện field đó; session vẫn được giữ theo logic observation.
+SQL mode: **{source_qa.get('sql_mode', 'legacy')}**. Optimized stage app/window một lần trên đĩa; `source_qa.rows` chỉ đếm window, không audit toàn history.
 Chia theo `firebase_exp_abt_22`, nhóm 0/1/2. Version: {', '.join(cfg['versions']) or 'mọi version'}. **Mọi level**, không giới hạn1–200.
 
 | File / tab Excel | Nội dung |
@@ -264,26 +339,46 @@ def run(args):
     dest.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix='.' + dest.name + '-', dir=dest.parent))
     con = None
+    work_dir = None
     try:
-        con = duckdb.connect()
+        sql_mode = getattr(args, 'sql_mode', 'optimized')
+        if sql_mode == 'optimized':
+            work_root = getattr(args, 'work_dir', None)
+            if work_root:
+                work_root = Path(work_root).expanduser().resolve()
+                work_root.mkdir(parents=True, exist_ok=True)
+                work_dir = Path(tempfile.mkdtemp(prefix='sandjam-work-', dir=work_root))
+            else:
+                work_dir = staging / '_work'
+                work_dir.mkdir()
+        con = duckdb.connect(str(work_dir / 'report.duckdb') if sql_mode == 'optimized' else ':memory:')
         con.execute("SET TimeZone='UTC'")
         con.execute('SET memory_limit=?', [args.memory_limit])
         con.execute('SET threads=?', [args.threads])
-        con.execute('SET temp_directory=?', [str(staging / '_spill')])
+        if sql_mode == 'optimized':
+            # All exports sort explicitly; retaining insertion order wastes memory on large CTAS.
+            con.execute('SET preserve_insertion_order=false')
+        con.execute('SET temp_directory=?', [str(work_dir / 'spill' if work_dir else staging / '_spill')])
         con.execute('CREATE MACRO date_sub_days(d,n) AS CAST(d AS DATE)-CAST(n AS INTEGER)')
         con.execute('CREATE MACRO date_add_days(d,n) AS CAST(d AS DATE)+CAST(n AS INTEGER)')
-        source_qa = prepare_input(con, args, cfg)
-        con.execute(config_view(cfg))
-        rendered = render_sql(cfg)
         sql_dir = staging / 'sql_executed'
         sql_dir.mkdir()
+        args.sql_dir = sql_dir
+        source_qa = prepare_input(con, args, cfg)
+        con.execute(config_view(cfg))
+        rendered = render_sql(cfg, sql_mode)
+        timings = []
         (sql_dir / 'config.sql').write_text(config_view(cfg) + ';\n')
         for filename, text in rendered:
             (sql_dir / filename).write_text(text, encoding='utf-8')
             print('SQL ' + filename, flush=True)
             for number, statement in enumerate(split_sql(text), 1):
                 try:
+                    started = time.monotonic()
                     con.execute(statement)
+                    elapsed = time.monotonic() - started
+                    timings.append(dict(file=filename, statement=number, seconds=elapsed))
+                    print(f'  statement {number}: {elapsed:.1f}s', flush=True)
                 except Exception as exc:
                     raise RuntimeError(f'{filename}, statement{number}: {exc}') from exc
         windows = [{'n': n, 'eligible_end': str(end)} for n,end in con.execute('SELECT n,eligible_end FROM churn_windows ORDER BY n').fetchall()]
@@ -295,11 +390,16 @@ def run(args):
             raise ValueError('Data Metrics rỗng: kiểm mode_fixed, period và AB; không coi run này là hoàn tất.')
         con.close()
         shutil.rmtree(staging / '_spill', ignore_errors=True)
+        if work_dir is not None:
+            shutil.rmtree(work_dir, ignore_errors=True)
         excel_report(staging)
         (staging / 'data_readme.md').write_text(data_readme(cfg, source_qa, outputs, windows), encoding='utf-8')
         manifest = dict(status='complete', created_at_utc=datetime.now(timezone.utc).isoformat(),
                         engine='duckdb', duckdb_version=duckdb.__version__, input=str(args.input),
-                        config=cfg, source_qa=source_qa, churn_windows=windows, outputs=outputs,
+                        config=cfg, source_qa=source_qa, sql_mode=sql_mode, sql_timings=timings,
+                        runtime=dict(memory_limit=args.memory_limit,threads=args.threads,
+                                     work_dir=str(getattr(args,'work_dir',None) or 'output staging'),
+                                     preserve_insertion_order=(sql_mode!='optimized')), churn_windows=windows, outputs=outputs,
                         source_hashes={str(p.relative_to(ROOT)):sha(p) for p in ROOT.rglob('*')
                                        if p.is_file() and '__pycache__' not in p.parts and p.suffix in ('.py','.sql','.json','.txt')},
                         files={str(p.relative_to(staging)):sha(p) for p in staging.rglob('*') if p.is_file()})
@@ -309,6 +409,8 @@ def run(args):
     except Exception:
         if con is not None:
             con.close()
+        if work_dir is not None:
+            shutil.rmtree(work_dir, ignore_errors=True)
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
@@ -318,6 +420,9 @@ def main():
     p.add_argument('--input', required=True, help='Thư mục raw_fixed hoặc glob Parquet; giữ đầy đủ history/session, không chỉ gameplay classic.')
     p.add_argument('--output', required=True, help='Thư mục local mới cho3 CSV/Excel/readme/manifest.')
     p.add_argument('--config', default=str(ROOT / 'config.json'))
+    p.add_argument('--sql-mode', choices=('optimized','legacy'), default='optimized',
+                   help='optimized mặc định: một scan Parquet window; legacy dùng SQL cũ để đối chiếu.')
+    p.add_argument('--work-dir', help='Thư mục SSD local cho database/spill của optimized; tự tạo và dọn thư mục con riêng.')
     p.add_argument('--memory-limit', default='8GB', help='DuckDB spill xuống temp khi vượt memory_limit.')
     p.add_argument('--threads', type=int, default=4)
     p.add_argument('--row-cap', type=int, default=20000)
