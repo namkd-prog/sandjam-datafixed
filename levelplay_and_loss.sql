@@ -94,6 +94,28 @@ SELECT x.variant,x.level,COUNT(DISTINCT CASE WHEN y.user_pseudo_id IS NULL THEN 
 FROM starts x LEFT JOIN starts y ON x.variant=y.variant AND x.user_pseudo_id=y.user_pseudo_id AND y.level=x.level+1
 GROUP BY x.variant,x.level;
 
+-- Original Churn query returns start/drop/remove counts separately.
+-- app_remove does NOT have a mode filter in the supplied source SQL.
+-- Keep remove count as a separate component, never add it to drop count.
+CREATE OR REPLACE TEMP VIEW churn_components AS
+WITH removes AS (
+ SELECT DISTINCT e.variant,e.property_bi_level AS level,e.user_pseudo_id
+ FROM system_clean e CROSS JOIN report_config c
+ WHERE e.event_name='app_remove' AND e.local_date BETWEEN c.report_start AND c.report_end
+ AND ARRAY_CONTAINS(c.versions,e.app_version) AND e.variant IN ('0','1','2')
+ AND (INSTR(get_json_object(e.user_properties,'$.level'),'.')=0 OR e.property_phase IS NULL OR e.property_phase<=1)
+), remove_counts AS (
+ SELECT s.variant,s.level,COUNT(DISTINCT r.user_pseudo_id) AS user_remove_count
+ FROM starts s JOIN removes r ON s.variant=r.variant AND s.level=r.level AND s.user_pseudo_id=r.user_pseudo_id
+ GROUP BY s.variant,s.level
+)
+SELECT c.variant,c.level,c.user_start_count,
+ COALESCE(d.dropped_users,0) AS user_dropped_count,
+ COALESCE(r.user_remove_count,0) AS user_remove_count
+FROM start_counts c
+LEFT JOIN drop_counts d ON c.variant=d.variant AND c.level=d.level
+LEFT JOIN remove_counts r ON c.variant=r.variant AND c.level=r.level;
+
 -- 08. Range level va phase cho metric, theo nguon param/property tuong ung.
 CREATE OR REPLACE TEMP VIEW metric_events AS
 SELECT e.* FROM ab_classic_events e CROSS JOIN report_config c
@@ -207,7 +229,7 @@ FROM denominators d LEFT JOIN churned ch ON d.n=ch.n AND d.variant=ch.variant AN
 -- 18. Bang LEVELPLAY, dung thu tu cot tren BI va them AB group.
 CREATE OR REPLACE TEMP VIEW levelplay_report AS
 SELECT c.variant AS ab_group,c.level,c.user_start_count,
- COALESCE(d.dropped_users,0)*100.0/c.user_start_count AS churn_rate_pct,
+ COALESCE(ch.user_dropped_count,0)*100.0/c.user_start_count AS churn_rate_pct,
  d3.rate AS churn_rate_d3_pct,d7.rate AS churn_rate_d7_pct,
  COALESCE(a.aps_avg,0) AS aps_avg,
  COALESCE(s.avg_completion,0) AS completion_rate_first_attempt_pct,
@@ -221,7 +243,7 @@ SELECT c.variant AS ab_group,c.level,c.user_start_count,
  COALESCE(COALESCE(s.impressions,0)*1.0/NULLIF(ad.users,0),0) AS imp_per_lau,
  COALESCE(COALESCE(s.reward_impressions,0)*1.0/NULLIF(ad.users,0),0) AS rwd_per_lau
 FROM start_counts c
-LEFT JOIN drop_counts d ON c.variant=d.variant AND c.level=d.level
+LEFT JOIN churn_components ch ON c.variant=ch.variant AND c.level=ch.level
 LEFT JOIN level_stats s ON c.variant=s.variant AND c.level=s.level
 LEFT JOIN aps a ON c.variant=a.variant AND c.level=a.level
 LEFT JOIN pay_counts p ON c.variant=p.variant AND c.level=p.level

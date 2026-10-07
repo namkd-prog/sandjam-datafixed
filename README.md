@@ -51,6 +51,7 @@ Mặc định app id6758755718, ngày 02–05/10/2026, experiment firebase_exp_a
 
 ## Công thức và phạm vi
 
+- Churn Rate thường: theo query ListUserStartCTEs/DroppedCTEs/RemoveCTEs người dùng gửi. View churn_components giữ user_start_count, user_dropped_count, user_remove_count riêng. Rate = user_dropped_count/user_start_count ×100; app_remove count không tự cộng vào drop. app_remove không lọc mode, đọc level từ user_properties và giao với starters theo level/user/variant. D3/D7 Levelplay vẫn là Non Return Rate, hai cột churn Loss vẫn là drop rate như đã chốt.
 - IMP/LAU chỉ đếm paid_ad_impression được phân loại inter hoặc rwd (regex inter ưu tiên, rồi reward/video); loại banner, native và các format khác. Rwd/LAU chỉ đếm rwd. Đã query ad formats thực tế 02–05/10: rewarded 44.561, interstitial 32.889, native_advanced 40.662, banner 4.852 (AB production, chưa áp cutoff/mode/range nên đây không phải tử số report cuối).
 - Churn Rate: user level_start X nhưng không level_start X+1 / user level_start X, trong cùng period và variant.
 - D3/D7: Non Return Rate theo tài liệu mới, session_start/screen_view ở ngày +1..+N. Ngày đủ điều kiện = min(report_end, as_of_date-(N+1), observation_end-N). Mẫu số cũng cắt theo khoảng ngày này. Churn gán ở level cao nhất user chơi trong ngày trong range truy vấn. Không cộng users_active.
@@ -73,7 +74,7 @@ Người dùng đã xác nhận hai cột mang tên D3 trong Loss là drop rate.
 
 Ngày 07/10/2026: D3 chỉ có thể dùng play_date tới 03/10 nếu đã đủ activity; D7 chưa có ngày đủ quan sát trong 02–05/10, trả NULL. Muốn đủ cả period cần bổ sung activity đến hết 08/10 (D3), 12/10 (D7), theo T-1 chạy từ 09/10, 13/10. Không lọc activity comeback theo mode/level/variant; vẫn giữ filter version và system theo query nguồn.
 
-Đã kiểm tra Python và chạy 24 câu Spark SQL trên PySpark 3.5.3 với 369 dòng raw mẫu thực tế lấy từ StarRocks. Đối chiếu cùng sample giữa hai engine; chi tiết ở the audit section below. Đây là kiểm chứng SQL trên sample, chưa phải chạy toàn bộ export raw hay kiểm chứng connector S3/HDFS/ADLS và ghi report trên cluster đích.
+Đã kiểm tra Python và chạy 25 câu Spark SQL trên PySpark 3.5.3 với 369 dòng raw mẫu thực tế lấy từ StarRocks. Đối chiếu cùng sample giữa hai engine; chi tiết ở the audit section below. Đây là kiểm chứng SQL trên sample, chưa phải chạy toàn bộ export raw hay kiểm chứng connector S3/HDFS/ADLS và ghi report trên cluster đích.
 
 Audit StarRocks ngày 07/10/2026 phát hiện user đã có progression>650 nhưng không có clear650 đúng điều kiện trong lịch sử 01/04–06/10. Giữ rule cutoff-only đã chốt, không tự suy cutoff hoặc loại user. Runner xuất `qa_missing_clear650_csv` và cảnh báo; cần kiểm tra/bổ sung lịch sử trước khi coi report đã loại hết loop. Event bị thiếu mode/level cũng giữ nguyên trong raw nhưng không vào metric strict classic. Lần start 1 bị lặp vẫn cộng theo SQL nguồn, không tự deduplicate.
 
@@ -113,6 +114,6 @@ Vì thế SQL chạy thành công chưa chứng minh đã loại hết loop. Run
 
 ## Giới hạn kiểm chứng
 
-Sample 369 dòng: 24 câu Spark SQL đều phân tích/thực thi thành công. Levelplay 31 dòng, 434 ô số khớp; Loss 2 dòng, 27 ô số khớp StarRocks trên chính cùng sample (tolerance 1e-6, keys/nulls cũng đối chiếu). Đây là kiểm tra tương thích engine/formula, không xác nhận sample đủ để suy kết quả full report.
+Sample 369 dòng: 25 câu Spark SQL đều phân tích/thực thi thành công. Levelplay 31 dòng, 434 ô số khớp; Loss 2 dòng, 27 ô số khớp StarRocks trên chính cùng sample (tolerance 1e-6, keys/nulls cũng đối chiếu). Đây là kiểm tra tương thích engine/formula, không xác nhận sample đủ để suy kết quả full report.
 
 Đã chạy SQL Spark trên sample thực tế, kiểm tra output bằng cùng sample trong StarRocks. Không upload raw sample/user IDs lên GitHub. Chưa chạy full-history Spark export hoặc xác minh I/O của cluster đích. Exclude pre-publish vẫn thiếu danh sách Internal experiment IDs của app; không tự gán debug_event=1 thành test user.
