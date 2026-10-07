@@ -1,0 +1,8 @@
+{
+  "source": {"format": "parquet", "path": "s3a://YOUR_BUCKET/raw/", "options": {}},
+  "app_id": "id6758755718",
+  "history_start_utc7": "2026-04-01 00:00:00",
+  "history_end_exclusive_utc7": "2026-10-07 00:00:00",
+  "experiment_key": "firebase_exp_abt_22",
+  "output_path": "s3a://YOUR_BUCKET/exports/raw_mode_run1"
+}
