@@ -1,5 +1,7 @@
 # Spark lấy raw và chỉnh mode
 
+Sau khi lấy raw: xem [QUERY_README.md](QUERY_README.md) và chạy `query_reports.py`. Các query đã tổng hợp trong một script [levelplay_and_loss.sql](levelplay_and_loss.sql); bước này tách khỏi bước export raw.
+
 Gói này chỉ xuất raw, không tính metric, không lọc classic, không loại user AB hay version và không đổi level ID. Đọc toàn bộ event của app `id6758755718` từ 01/04/2026 đến hết 06/10/2026 theo UTC+7. Giữ nguyên toàn bộ cột nguồn, bao gồm event_params và user_properties.
 
 ## Chạy trên máy/cluster có Spark

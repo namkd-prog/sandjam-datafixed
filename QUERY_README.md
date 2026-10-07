@@ -1,0 +1,36 @@
+# Query hai bảng BI sau khi lấy raw
+
+`levelplay_and_loss.sql` là một script Spark SQL tổng hợp. `query_reports.py` nạp raw/config, chạy script và xuất Levelplay/Loss dạng Parquet và CSV. `process.py` vẫn chỉ lấy raw + chỉnh mode; không tính metric.
+
+```bash
+spark-submit query_reports.py --input s3a://YOUR_BUCKET/exports/raw_mode_run1/raw_fixed --output s3a://YOUR_BUCKET/reports/ab_run1 --observation-end 2026-10-06
+```
+
+Đặt `--observation-end` là ngày nguồn đã đủ, theo UTC+7. Không coi có một event vào ngày đó là nguồn đã hoàn chỉnh. Ngày `--as-of` mặc định là ngày chạy UTC+7. Có thể chỉ định để tái lập kết quả. Python cần zoneinfo (Python >=3.9 và timezone data trên máy/cluster).
+
+Mặc định app id6758755718, ngày 02–05/10/2026, experiment firebase_exp_abt_22, groups 0/1/2, version 0.6.3–0.6.7, level 1–200. Dùng `--level-max 650` nếu cần toàn bộ classic. Script đọc thêm level tiếp theo ở biên range cho drop rate. Coin Balance mặc định resources=[coin]; thay `--balance-resources coin,ticket` nếu bộ lọc BI chọn những resource đó. Total Balance cộng mọi key hợp lệ theo tài liệu, không dùng chung công thức với Coin Balance.
+
+## Công thức và phạm vi
+
+- Churn Rate: user level_start X nhưng không level_start X+1 / user level_start X, trong cùng period và variant.
+- D3/D7: Non Return Rate theo tài liệu mới, session_start/screen_view ở ngày +1..+N. Ngày đủ điều kiện = min(report_end, as_of_date-(N+1), observation_end-N). Mẫu số cũng cắt theo khoảng ngày này. Churn gán ở level cao nhất user chơi trong ngày trong range truy vấn. Không cộng users_active.
+- Completion Rate First Attempt: AVG completion trên level_end không continue (0/null), không lọc start_count=1, không đổi sang tỷ lệ win-first.
+- Coin/Total Coin Spend: SUM value_game_currency chỉ currency coin / mọi currency; mẫu số user level_start.
+- Balance: số dư không âm ở level_start_turn start_count=1; mẫu số distinct user level_start_turn ở mọi attempt. Total gồm coin/ticket/key chứa booster, trừ use_booster_count.
+- APS: trung bình có trọng số start_count theo số distinct winning user trong mỗi start_count trên level_end.
+- Booster/Pay/Ads theo SQL workbook: booster spend value, user dùng booster trên level_end_turn, payer in_app_purchase giao với starters; impression paid_ad_impression, rewarded format reward/video (inter ưu tiên).
+- Loss: level_end_turn, success=false, completion nonnull, start_count=1. Bucket đếm distinct user / distinct losing user; tổng % có thể >100 vì một user xuất hiện ở nhiều bucket. Giữ cách bucket của query gốc, không tự loại completion ngoài 0–100.
+
+## Mode và raw
+
+Giữ nguyên raw và level ID. Gameplay/currency dùng mode_fixed. Query BI gốc Ads/IAP dùng user_properties.mode/level: script đọc đúng nguồn đó và áp lại cutoff first_clear_650_ts cho property mode classic. Không tự lấy mode của user thành mode gameplay. Filter strict classic theo yêu cầu hiện tại; khác BI mặc định có gộp null/empty. Nếu thiếu mode nguồn, event không vào metric nhưng vẫn nằm trong raw export.
+
+Giữ các system filter đã có trong nguồn SQL (China android, balance lớn, purchase outlier, earn âm). Chưa có danh sách experiment Internal của app để tái lập filter Exclude pre-publish; không tự coi debug_event=1 là playtest. Nếu BI áp filter này cần bổ sung đúng IDs. Raw không bị loại bởi các filter report.
+
+## Còn thiếu xác nhận
+
+`loss_report.churn_users_d3` và `churn_rate_d3_pct` để NULL: query Loss đã gửi không chứa hai cột này, chưa xác nhận chúng lấy churn toàn level hay cohort người thua start 1. Không tự gán cùng một rate cho hai cohort.
+
+Ngày 07/10/2026: D3 chỉ có thể dùng play_date tới 03/10 nếu đã đủ activity; D7 chưa có ngày đủ quan sát trong 02–05/10, trả NULL. Muốn đủ cả period cần bổ sung activity đến hết 08/10 (D3), 12/10 (D7), theo T-1 chạy từ 09/10, 13/10. Không lọc activity comeback theo mode/level/variant; vẫn giữ filter version và system theo query nguồn.
+
+Đã kiểm tra cú pháp Python. Máy hiện tại không có Spark nên chưa kiểm chứng chạy end-to-end script Spark SQL; không xem các kết quả StarRocks cũ là kết quả của script này.
