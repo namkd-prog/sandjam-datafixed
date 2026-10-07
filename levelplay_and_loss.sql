@@ -109,7 +109,8 @@ SELECT variant,level,
  SUM(CASE WHEN event_name='spend_virtual_currency' AND currency_name='coin' THEN game_currency_value ELSE 0 END) AS coin_spend,
  SUM(CASE WHEN event_name='spend_virtual_currency' THEN game_currency_value ELSE 0 END) AS total_coin_spend,
  SUM(CASE WHEN event_name='spend_virtual_currency' AND currency_type='booster' AND currency_name IS NOT NULL AND currency_name<>'' THEN currency_value ELSE 0 END) AS booster_count,
- SUM(CASE WHEN event_name='paid_ad_impression' THEN 1 ELSE 0 END) AS impressions,
+ -- IMP/LAU only includes inter + rwd, not banner/native/other formats.
+ SUM(CASE WHEN event_name='paid_ad_impression' AND ad_format RLIKE 'inter|reward|video' THEN 1 ELSE 0 END) AS impressions,
  SUM(CASE WHEN event_name='paid_ad_impression' AND NOT(ad_format RLIKE 'inter') AND ad_format RLIKE 'reward|video' THEN 1 ELSE 0 END) AS reward_impressions,
  AVG(CASE WHEN event_name='level_end' AND (continues=0 OR continues IS NULL) THEN completion END) AS avg_completion
 FROM metric_events GROUP BY variant,level;

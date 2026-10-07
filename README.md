@@ -51,6 +51,7 @@ Mặc định app id6758755718, ngày 02–05/10/2026, experiment firebase_exp_a
 
 ## Công thức và phạm vi
 
+- IMP/LAU chỉ đếm paid_ad_impression được phân loại inter hoặc rwd (regex inter ưu tiên, rồi reward/video); loại banner, native và các format khác. Rwd/LAU chỉ đếm rwd. Đã query ad formats thực tế 02–05/10: rewarded 44.561, interstitial 32.889, native_advanced 40.662, banner 4.852 (AB production, chưa áp cutoff/mode/range nên đây không phải tử số report cuối).
 - Churn Rate: user level_start X nhưng không level_start X+1 / user level_start X, trong cùng period và variant.
 - D3/D7: Non Return Rate theo tài liệu mới, session_start/screen_view ở ngày +1..+N. Ngày đủ điều kiện = min(report_end, as_of_date-(N+1), observation_end-N). Mẫu số cũng cắt theo khoảng ngày này. Churn gán ở level cao nhất user chơi trong ngày trong range truy vấn. Không cộng users_active.
 - Completion Rate First Attempt: AVG completion trên level_end không continue (0/null), không lọc start_count=1, không đổi sang tỷ lệ win-first.
