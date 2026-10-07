@@ -9,7 +9,7 @@
 -- Khong dan truc tiep file vao StarRocks: day la cu phap Spark SQL.
 -- Neu chay tay tren Spark SQL, phai tao raw_fixed_input/report_config nhu runner truoc.
 -- Giu level ID goc, tach Coin Balance va Total Coin Balance.
--- Loss churn la DROP RATE, Levelplay D3/D7 la NON RETURN RATE.
+-- Loss churn la INCOMPLETE LEVEL CHURN D3, Levelplay D3/D7 la NON RETURN RATE.
 -- Cac ngay chua du quan sat Dx de NULL, khong gan thanh 0.
 -- Spark SQL, run via query_reports.py after process.py.
 -- raw_fixed_input: original raw + mode_fixed + first_clear_650_ts.
@@ -276,20 +276,59 @@ SELECT variant AS ab_group,level,COUNT(DISTINCT user_pseudo_id) AS user_count,CO
  COUNT(DISTINCT CASE WHEN bucket=9 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `90-100`
 FROM losses GROUP BY variant,level;
 
--- User-confirmed Loss mapping: these legacy D3 labels represent ordinary drop rate,
--- not Non Return Rate and not a denominator limited to first-attempt losers.
--- 21. Bang LOSS: ghep DROP users/rate theo level, khong dung Non Return D3.
--- Ten cot D3 giu theo BI, mau so drop la user start, khong phai losing user.
+-- 21. Loss INCOMPLETE churn D3, separate from Levelplay drop/Non Return.
+-- Reproduced all 14 screenshot levels for Sep23-Oct6 UTC+7 (counts and rounded rates).
+-- Latest start DATE in the whole report, then highest level on that date.
+-- No level_end for the user/level in the report (win OR loss counts as an end).
+-- No session on ANY later date through report_end, not merely play_date+1..+3.
+-- Denominator uses mature D3 starters; not loss users or only attempt=1 starters.
+-- Completion events and comeback sessions do not require classic mode or matching AB variant.
+CREATE OR REPLACE TEMP VIEW loss_churn_counts AS
+WITH denominators AS (
+ SELECT variant,level,COUNT(DISTINCT user_pseudo_id) AS total_users
+ FROM churn_play_pre WHERE n=3 GROUP BY variant,level
+), ranked_starts AS (
+ SELECT variant,user_pseudo_id,local_date,level,
+ ROW_NUMBER() OVER(PARTITION BY variant,user_pseudo_id ORDER BY local_date DESC,level DESC) AS rn
+ FROM metric_events WHERE event_name='level_start'
+), last_starts AS (
+ SELECT p.variant,p.user_pseudo_id,p.level,p.local_date
+ FROM ranked_starts p CROSS JOIN churn_windows w
+ WHERE p.rn=1 AND w.n=3 AND p.local_date BETWEEN w.report_start AND w.eligible_end
+), ended AS (
+ SELECT DISTINCT e.user_pseudo_id,e.level
+ FROM system_clean e CROSS JOIN report_config c
+ WHERE e.event_name='level_end' AND e.local_date BETWEEN c.report_start AND c.report_end
+ AND ARRAY_CONTAINS(c.versions,e.app_version)
+), incomplete AS (
+ SELECT p.* FROM last_starts p LEFT JOIN ended e
+ ON p.user_pseudo_id=e.user_pseudo_id AND p.level=e.level
+ WHERE e.user_pseudo_id IS NULL
+), comeback AS (
+ SELECT p.variant,p.level,p.user_pseudo_id,
+ MAX(CASE WHEN s.user_pseudo_id IS NOT NULL THEN 1 ELSE 0 END) AS has_comeback
+ FROM incomplete p CROSS JOIN report_config c LEFT JOIN daily_sessions s
+ ON p.user_pseudo_id=s.user_pseudo_id
+ AND s.local_date>p.local_date AND s.local_date<=c.report_end
+ GROUP BY p.variant,p.level,p.user_pseudo_id
+), churned AS (
+ SELECT variant,level,COUNT(DISTINCT CASE WHEN has_comeback=0 THEN user_pseudo_id END) AS users_churned
+ FROM comeback GROUP BY variant,level
+)
+SELECT d.*,COALESCE(ch.users_churned,0) AS users_churned,
+ COALESCE(ch.users_churned,0)*100.0/NULLIF(d.total_users,0) AS rate
+FROM denominators d LEFT JOIN churned ch ON d.variant=ch.variant AND d.level=ch.level;
+
+-- 22. Bang LOSS: incomplete churn D3, counts/buckets van chi thua attempt=1.
 CREATE OR REPLACE TEMP VIEW loss_report AS
 SELECT l.ab_group,l.level,l.user_count,l.lose_count,
- COALESCE(d.dropped_users,0) AS churn_users_d3,
- COALESCE(d.dropped_users,0)*100.0/NULLIF(c.user_start_count,0) AS churn_rate_d3_pct,
+ COALESCE(d.users_churned,0) AS churn_users_d3,
+ d.rate AS churn_rate_d3_pct,
  l.`0-10`,l.`10-20`,l.`20-30`,l.`30-40`,l.`40-50`,
  l.`50-60`,l.`60-70`,l.`70-80`,l.`80-90`,l.`90-100`
 FROM loss_distribution l
-LEFT JOIN start_counts c ON l.ab_group=c.variant AND l.level=c.level
-LEFT JOIN drop_counts d ON l.ab_group=d.variant AND l.level=d.level;
+LEFT JOIN loss_churn_counts d ON l.ab_group=d.variant AND l.level=d.level;
 
--- 22. Xem bang ket qua. Runner Python xuat hai view nay ra Parquet/CSV.
+-- 23. Xem bang ket qua. Runner Python xuat hai view nay ra Parquet/CSV.
 SELECT * FROM levelplay_report ORDER BY ab_group,level;
 SELECT * FROM loss_report ORDER BY ab_group,level;

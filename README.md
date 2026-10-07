@@ -51,7 +51,7 @@ Mặc định app id6758755718, ngày 02–05/10/2026, experiment firebase_exp_a
 
 ## Công thức và phạm vi
 
-- Churn Rate thường: theo query ListUserStartCTEs/DroppedCTEs/RemoveCTEs người dùng gửi. View churn_components giữ user_start_count, user_dropped_count, user_remove_count riêng. Rate = user_dropped_count/user_start_count ×100; app_remove count không tự cộng vào drop. app_remove không lọc mode, đọc level từ user_properties và giao với starters theo level/user/variant. D3/D7 Levelplay vẫn là Non Return Rate, hai cột churn Loss vẫn là drop rate như đã chốt.
+- Churn Rate thường: theo query ListUserStartCTEs/DroppedCTEs/RemoveCTEs người dùng gửi. View churn_components giữ user_start_count, user_dropped_count, user_remove_count riêng. Rate = user_dropped_count/user_start_count ×100; app_remove count không tự cộng vào drop. app_remove không lọc mode, đọc level từ user_properties và giao với starters theo level/user/variant. D3/D7 Levelplay vẫn là Non Return Rate; churn Loss dùng Incomplete Level Churn D3 mô tả bên dưới.
 - IMP/LAU chỉ đếm paid_ad_impression được phân loại inter hoặc rwd (regex inter ưu tiên, rồi reward/video); loại banner, native và các format khác. Rwd/LAU chỉ đếm rwd. Đã query ad formats thực tế 02–05/10: rewarded 44.561, interstitial 32.889, native_advanced 40.662, banner 4.852 (AB production, chưa áp cutoff/mode/range nên đây không phải tử số report cuối).
 - Churn Rate: user level_start X nhưng không level_start X+1 / user level_start X, trong cùng period và variant.
 - D3/D7: Non Return Rate theo tài liệu mới, session_start/screen_view ở ngày +1..+N. Ngày đủ điều kiện = min(report_end, as_of_date-(N+1), observation_end-N). Mẫu số cũng cắt theo khoảng ngày này. Churn gán ở level cao nhất user chơi trong ngày trong range truy vấn. Không cộng users_active.
@@ -70,11 +70,19 @@ Giữ các system filter đã có trong nguồn SQL (China android, balance lớ
 
 ## Churn trong bảng Loss
 
-Người dùng đã xác nhận hai cột mang tên D3 trong Loss là drop rate. `churn_users_d3` đếm distinct user start X nhưng không start X+1; `churn_rate_d3_pct` chia số đó cho distinct user start X, nhân 100. Dùng cùng variant, period, mode và filter report. Mẫu số không phải user thua start 1. Giữ tên cột để khớp bảng BI nhưng metric này không dùng cửa sổ 3 ngày. Loss counts/buckets vẫn chỉ xét thua start_count=1. Churn trong Levelplay giữ nguyên công thức trước: Churn Rate là drop rate, D3/D7 là Non Return Rate.
+Hai cột `churn_users_d3` / `churn_rate_d3_pct` dùng **Incomplete Level Churn D3**, tách khỏi drop rate và Non Return D3 của Levelplay. Frontend BI lấy metric `apps.engagement.incomplete_level_churn_rate` riêng và nhân rate với 100. Công thức đã tái lập đúng cả 14 level (3–16) trong ảnh ngày 23/09–06/10/2026 UTC+7, cả số churn user và rate làm tròn hai chữ số. Đây là kiểm chứng trên dữ liệu thực tế; chưa đọc được SQL backend do API BI yêu cầu đăng nhập.
+
+1. Trong toàn kỳ báo cáo, lấy **ngày level_start cuối** của user trong mỗi variant, rồi level cao nhất ngày đó trong range báo cáo. Chọn ngày cuối trước khi cắt ngày đủ tuổi D3 để không đếm user đã chơi lại vào cuối kỳ.
+2. Chỉ xét ngày đủ tuổi D3: `min(report_end, as_of_date-4, observation_end-3)`.
+3. Loại user-level đã có `level_end` trong kỳ, kể cả success=false. Event kết thúc không cần cùng mode/variant; vẫn giữ version và system filter của report.
+4. Loại user có `session_start` hoặc `screen_view` ở **bất kỳ ngày nào sau ngày chơi cuối đến hết report_end**. Không chỉ kiểm tra ba ngày ngay sau lần chơi cũ; không lọc mode/level/variant của session.
+5. Đếm distinct user còn lại theo variant/level, chia cho distinct user level_start từ report_start đến ngày đủ tuổi D3, nhân 100. Không chia cho losing users hoặc chỉ users start_count=1.
+
+Loss counts/buckets vẫn lọc **start_count=1** theo yêu cầu; churn lấy cohort riêng và không phụ thuộc attempt. Ảnh BI dùng Attempts All nên loss counts/buckets bản start 1 có thể khác ảnh. Ví dụ kiểm chứng: level 3 = 10/1443×100 = 0,69%; level 14 = 18/1245×100 = 1,45%. Churn Levelplay giữ nguyên: drop start X không start X+1 và Non Return D3/D7. Chưa có cohort đủ tuổi thì rate Loss trả NULL; raw, mode repair và level ID giữ nguyên.
 
 Ngày 07/10/2026: D3 chỉ có thể dùng play_date tới 03/10 nếu đã đủ activity; D7 chưa có ngày đủ quan sát trong 02–05/10, trả NULL. Muốn đủ cả period cần bổ sung activity đến hết 08/10 (D3), 12/10 (D7), theo T-1 chạy từ 09/10, 13/10. Không lọc activity comeback theo mode/level/variant; vẫn giữ filter version và system theo query nguồn.
 
-Đã kiểm tra Python và chạy 25 câu Spark SQL trên PySpark 3.5.3 với 369 dòng raw mẫu thực tế lấy từ StarRocks. Đối chiếu cùng sample giữa hai engine; chi tiết ở the audit section below. Đây là kiểm chứng SQL trên sample, chưa phải chạy toàn bộ export raw hay kiểm chứng connector S3/HDFS/ADLS và ghi report trên cluster đích.
+Script hiện có 26 câu Spark SQL. Kiểm chứng trên PySpark 3.5.3 với raw mẫu thực tế từ StarRocks; đây chưa phải chạy toàn bộ export raw hay kiểm chứng connector S3/HDFS/ADLS và ghi report trên cluster đích.
 
 Audit StarRocks ngày 07/10/2026 phát hiện user đã có progression>650 nhưng không có clear650 đúng điều kiện trong lịch sử 01/04–06/10. Giữ rule cutoff-only đã chốt, không tự suy cutoff hoặc loại user. Runner xuất `qa_missing_clear650_csv` và cảnh báo; cần kiểm tra/bổ sung lịch sử trước khi coi report đã loại hết loop. Event bị thiếu mode/level cũng giữ nguyên trong raw nhưng không vào metric strict classic. Lần start 1 bị lặp vẫn cộng theo SQL nguồn, không tự deduplicate.
 
@@ -106,7 +114,7 @@ Vì thế SQL chạy thành công chưa chứng minh đã loại hết loop. Run
 
 ## Công thức được giữ
 
-- Churn Levelplay thường và hai cột churn mang tên D3 ở Loss: drop start X không start X+1 / start X.
+- Churn Levelplay thường: drop start X không start X+1 / start X. Loss dùng Incomplete Level Churn D3 mô tả ở trên.
 - Levelplay D3/D7: Non Return Rate +1..+N; cùng eligible date range cho numerator/denominator, MAX level/user/day, session_start/screen_view không lọc mode/level/variant. Ngày 07/10 D3 chỉ tới 03/10, D7 trong report 02–05/10 chưa đủ quan sát, để NULL.
 - Completion dùng AVG completion level_end continue_times=0/null, không phải win-first ratio.
 - Coin vs total spend và selected vs total balance giữ riêng theo tài liệu; balance numerator attempt1, denominator mọi attempt.
@@ -114,6 +122,6 @@ Vì thế SQL chạy thành công chưa chứng minh đã loại hết loop. Run
 
 ## Giới hạn kiểm chứng
 
-Sample 369 dòng: 25 câu Spark SQL đều phân tích/thực thi thành công. Levelplay 31 dòng, 434 ô số khớp; Loss 2 dòng, 27 ô số khớp StarRocks trên chính cùng sample (tolerance 1e-6, keys/nulls cũng đối chiếu). Đây là kiểm tra tương thích engine/formula, không xác nhận sample đủ để suy kết quả full report.
+Sample 369 dòng dùng để kiểm tra tương thích engine/formula, không đủ để suy kết quả full report. Bản Loss mới được đối chiếu lại Spark/StarRocks; keys, NULL và các ô số đều được kiểm tra. Levelplay giữ nguyên công thức.
 
 Đã chạy SQL Spark trên sample thực tế, kiểm tra output bằng cùng sample trong StarRocks. Không upload raw sample/user IDs lên GitHub. Chưa chạy full-history Spark export hoặc xác minh I/O của cluster đích. Exclude pre-publish vẫn thiếu danh sách Internal experiment IDs của app; không tự gán debug_event=1 thành test user.
