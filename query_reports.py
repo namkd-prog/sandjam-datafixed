@@ -94,9 +94,8 @@ def run(spark,args):
     qa.coalesce(1).write.mode('errorifexists').option('header','true').csv(args.output.rstrip('/')+'/qa_missing_clear650_csv')
     if qa.limit(1).count():
         print('WARNING: post650 classic events lack historical clear650. See qa_missing_clear650_csv. Reports retain them under the agreed cutoff-only rule.',flush=True)
-    for name in ('levelplay_report','loss_report'):
+    for name in ('levelplay_report','loss_report','loss_all_attempts_report'):
         result=spark.table(name).orderBy('ab_group','level')
-        result.write.mode('errorifexists').parquet(args.output.rstrip('/')+'/'+name)
         result.coalesce(1).write.mode('errorifexists').option('header','true').csv(args.output.rstrip('/')+'/'+name+'_csv')
     spark.table('churn_windows').show(truncate=False)
     print('COMPLETE reports='+args.output)

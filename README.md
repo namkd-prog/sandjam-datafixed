@@ -35,9 +35,19 @@ Copy cả thư mục raw_fixed về nếu muốn query local; giữ các thư m�
 Vì giữ mọi event và mọi field nên không giới hạn nguồn theo danh sách metric đã gửi. Dữ liệu đến hết 06/10 chưa đủ quan sát trọn D3/D7 cho ngày 05/10: khi tính churn cần bổ sung activity đến hết 08/10 hoặc 12/10 tương ứng theo định nghĩa BI.
 
 
-## Query hai bảng BI sau khi lấy raw
+## Query ba bảng BI sau khi lấy raw
 
-`levelplay_and_loss.sql` là một script Spark SQL tổng hợp. `query_reports.py` nạp raw/config, chạy script và xuất Levelplay/Loss dạng Parquet và CSV. `process.py` vẫn chỉ lấy raw + chỉnh mode; không tính metric.
+`levelplay_and_loss.sql` là một script Spark SQL tổng hợp. `query_reports.py` nạp raw/config, chạy script và xuất ba bảng dạng CSV. `process.py` vẫn chỉ lấy raw + chỉnh mode; không tính metric.
+
+| Output | Nội dung |
+|---|---|
+| `levelplay_report_csv` | Bảng Levelplay |
+| `loss_report_csv` | Loss cũ, chỉ `start_count=1` |
+| `loss_all_attempts_report_csv` | Loss mới, mọi attempt (kể cả thiếu start_count), như BI Attempts All |
+
+Cả hai bảng Loss có cùng các cột user count, lose count, Incomplete Churn D3 và 10 bucket completion. Bản All chỉ bỏ điều kiện attempt=1; mọi bộ lọc ngày/AB/version/mode vẫn như bản cũ. Churn lấy cohort riêng nên hai bảng dùng cùng giá trị churn tại cùng variant/level. Không cần chạy thêm lệnh hay tải lại raw; runner xuất cả ba bảng trong một lần chạy. Dùng thư mục output mới nếu output cũ đã tồn tại.
+
+Mỗi thư mục report `_csv` chứa một file `part-*.csv` có header và các file metadata của Spark. Lấy file `part-*.csv` để đọc hoặc gửi kết quả. Report không xuất Parquet. Raw đầu vào vẫn là thư mục `raw_fixed` của bước xử lý dữ liệu.
 
 ```bash
 spark-submit query_reports.py --input s3a://YOUR_BUCKET/exports/raw_mode_run1/raw_fixed --output s3a://YOUR_BUCKET/reports/ab_run1 --observation-end 2026-10-06
@@ -60,7 +70,7 @@ Mặc định app id6758755718, ngày 02–05/10/2026, experiment firebase_exp_a
 - Balance: số dư không âm ở level_start_turn start_count=1; mẫu số distinct user level_start_turn ở mọi attempt. Total gồm coin/ticket/key chứa booster, trừ use_booster_count.
 - APS: trung bình có trọng số start_count theo số distinct winning user trong mỗi start_count trên level_end.
 - Booster/Pay/Ads: booster spend value, user dùng booster trên level_end_turn, payer in_app_purchase giao với starters. Game này không có in_app_purchase_v2 trong lịch sử 01/04–06/10/2026 đã query kiểm tra; đã bỏ v2 khỏi logic report. Impression paid_ad_impression, rewarded format reward/video (inter ưu tiên). Mẫu số IMP/LAU và Rwd/LAU là user level_start đọc level/mode từ user_properties theo query BI gốc, không dùng lại mẫu số gameplay đọc event_params.
-- Loss: level_end_turn, success=false, completion nonnull, start_count=1. Bucket đếm distinct user / distinct losing user; tổng % có thể >100 vì một user xuất hiện ở nhiều bucket. Giữ cách bucket của query gốc, không tự loại completion ngoài 0–100.
+- Loss: level_end_turn, success=false, completion nonnull. `loss_report` lọc start_count=1; `loss_all_attempts_report` không lọc attempt. Bucket đếm distinct user / distinct losing user của từng bảng; tổng % có thể >100 vì một user xuất hiện ở nhiều bucket. Giữ cách bucket của query gốc, không tự loại completion ngoài 0–100.
 
 ## Mode và raw
 
@@ -78,11 +88,11 @@ Hai cột `churn_users_d3` / `churn_rate_d3_pct` dùng **Incomplete Level Churn 
 4. Loại user có `session_start` hoặc `screen_view` ở **bất kỳ ngày nào sau ngày chơi cuối đến hết report_end**. Không chỉ kiểm tra ba ngày ngay sau lần chơi cũ; không lọc mode/level/variant của session.
 5. Đếm distinct user còn lại theo variant/level, chia cho distinct user level_start từ report_start đến ngày đủ tuổi D3, nhân 100. Không chia cho losing users hoặc chỉ users start_count=1.
 
-Loss counts/buckets vẫn lọc **start_count=1** theo yêu cầu; churn lấy cohort riêng và không phụ thuộc attempt. Ảnh BI dùng Attempts All nên loss counts/buckets bản start 1 có thể khác ảnh. Ví dụ kiểm chứng: level 3 = 10/1443×100 = 0,69%; level 14 = 18/1245×100 = 1,45%. Churn Levelplay giữ nguyên: drop start X không start X+1 và Non Return D3/D7. Chưa có cohort đủ tuổi thì rate Loss trả NULL; raw, mode repair và level ID giữ nguyên.
+Loss counts/buckets được xuất riêng cho **start_count=1** và **All attempts**; churn lấy cohort riêng và không phụ thuộc attempt. Ảnh BI dùng Attempts All nên loss counts/buckets bản start 1 có thể khác ảnh. Ví dụ kiểm chứng: level 3 = 10/1443×100 = 0,69%; level 14 = 18/1245×100 = 1,45%. Churn Levelplay giữ nguyên: drop start X không start X+1 và Non Return D3/D7. Chưa có cohort đủ tuổi thì rate Loss trả NULL; raw, mode repair và level ID giữ nguyên.
 
 Ngày 07/10/2026: D3 chỉ có thể dùng play_date tới 03/10 nếu đã đủ activity; D7 chưa có ngày đủ quan sát trong 02–05/10, trả NULL. Muốn đủ cả period cần bổ sung activity đến hết 08/10 (D3), 12/10 (D7), theo T-1 chạy từ 09/10, 13/10. Không lọc activity comeback theo mode/level/variant; vẫn giữ filter version và system theo query nguồn.
 
-Script hiện có 26 câu Spark SQL. Kiểm chứng trên PySpark 3.5.3 với raw mẫu thực tế từ StarRocks; đây chưa phải chạy toàn bộ export raw hay kiểm chứng connector S3/HDFS/ADLS và ghi report trên cluster đích.
+Script hiện có 30 câu Spark SQL. Kiểm chứng trên PySpark 3.5.3 với raw mẫu thực tế từ StarRocks; đây chưa phải chạy toàn bộ export raw hay kiểm chứng connector S3/HDFS/ADLS và ghi report trên cluster đích.
 
 Audit StarRocks ngày 07/10/2026 phát hiện user đã có progression>650 nhưng không có clear650 đúng điều kiện trong lịch sử 01/04–06/10. Giữ rule cutoff-only đã chốt, không tự suy cutoff hoặc loại user. Runner xuất `qa_missing_clear650_csv` và cảnh báo; cần kiểm tra/bổ sung lịch sử trước khi coi report đã loại hết loop. Event bị thiếu mode/level cũng giữ nguyên trong raw nhưng không vào metric strict classic. Lần start 1 bị lặp vẫn cộng theo SQL nguồn, không tự deduplicate.
 
@@ -97,7 +107,7 @@ Audit StarRocks ngày 07/10/2026 phát hiện user đã có progression>650 như
 
 ## Kiểm tra StarRocks
 
-- Query đầy đủ tương ứng sau sửa chạy thành công: Levelplay 600 dòng, Loss 421 dòng. Không ghi dữ liệu hay đổi cấu hình global trên server.
+- Query đầy đủ tương ứng sau sửa chạy thành công: Levelplay 600 dòng, Loss attempt 1 có 421 dòng, Loss All có 446 dòng (AB 02–05/10). Không ghi dữ liệu hay đổi cấu hình global trên server.
 - Trong production version và AB period: không có user đổi giữa các variant 0/1/2.
 - Không có completion ngoài 0–100 hoặc winning event thiếu/nonpositive start_count trong phạm vi metric đã kiểm tra.
 - Phase>1/fractional event level không xuất hiện trong các event AB/production đã audit.

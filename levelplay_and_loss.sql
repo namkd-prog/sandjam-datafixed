@@ -5,7 +5,7 @@
 --   Output: <output_path>/raw_fixed (Parquet, 01/04 den het 06/10 UTC+7).
 -- Buoc 2 - Python nap raw_fixed, tao view/config va chay toan bo SQL nay:
 --   spark-submit query_reports.py --input /path/raw_fixed --output /path/reports_run1 --observation-end 2026-10-06
---   Output: levelplay_report, loss_report (Parquet), va *_csv trong output.
+--   CSV output: levelplay_report_csv, loss_report_csv, loss_all_attempts_report_csv.
 -- Khong dan truc tiep file vao StarRocks: day la cu phap Spark SQL.
 -- Neu chay tay tren Spark SQL, phai tao raw_fixed_input/report_config nhu runner truoc.
 -- Giu level ID goc, tach Coin Balance va Total Coin Balance.
@@ -329,6 +329,39 @@ SELECT l.ab_group,l.level,l.user_count,l.lose_count,
 FROM loss_distribution l
 LEFT JOIN loss_churn_counts d ON l.ab_group=d.variant AND l.level=d.level;
 
--- 23. Xem bang ket qua. Runner Python xuat hai view nay ra Parquet/CSV.
+-- 23. LOSS ALL: same failed/completion/mode/date filters, no attempt restriction.
+-- Includes attempts 1, 2, 3, ... and missing start_count, matching BI Attempts All.
+CREATE OR REPLACE TEMP VIEW losses_all_attempts AS
+SELECT *,CASE WHEN completion<10 THEN 0 WHEN completion<20 THEN 1 WHEN completion<30 THEN 2
+ WHEN completion<40 THEN 3 WHEN completion<50 THEN 4 WHEN completion<60 THEN 5
+ WHEN completion<70 THEN 6 WHEN completion<80 THEN 7 WHEN completion<90 THEN 8 ELSE 9 END AS bucket
+FROM metric_events WHERE event_name='level_end_turn' AND success='false' AND completion IS NOT NULL;
+
+CREATE OR REPLACE TEMP VIEW loss_distribution_all_attempts AS
+SELECT variant AS ab_group,level,COUNT(DISTINCT user_pseudo_id) AS user_count,COUNT(*) AS lose_count,
+ COUNT(DISTINCT CASE WHEN bucket=0 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `0-10`,
+ COUNT(DISTINCT CASE WHEN bucket=1 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `10-20`,
+ COUNT(DISTINCT CASE WHEN bucket=2 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `20-30`,
+ COUNT(DISTINCT CASE WHEN bucket=3 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `30-40`,
+ COUNT(DISTINCT CASE WHEN bucket=4 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `40-50`,
+ COUNT(DISTINCT CASE WHEN bucket=5 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `50-60`,
+ COUNT(DISTINCT CASE WHEN bucket=6 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `60-70`,
+ COUNT(DISTINCT CASE WHEN bucket=7 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `70-80`,
+ COUNT(DISTINCT CASE WHEN bucket=8 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `80-90`,
+ COUNT(DISTINCT CASE WHEN bucket=9 THEN user_pseudo_id END)*100.0/COUNT(DISTINCT user_pseudo_id) AS `90-100`
+FROM losses_all_attempts GROUP BY variant,level;
+
+-- Churn remains the separate incomplete D3 cohort, identical in both Loss tables.
+CREATE OR REPLACE TEMP VIEW loss_all_attempts_report AS
+SELECT l.ab_group,l.level,l.user_count,l.lose_count,
+ COALESCE(d.users_churned,0) AS churn_users_d3,
+ d.rate AS churn_rate_d3_pct,
+ l.`0-10`,l.`10-20`,l.`20-30`,l.`30-40`,l.`40-50`,
+ l.`50-60`,l.`60-70`,l.`70-80`,l.`80-90`,l.`90-100`
+FROM loss_distribution_all_attempts l
+LEFT JOIN loss_churn_counts d ON l.ab_group=d.variant AND l.level=d.level;
+
+-- 24. Python runner exports all three views as CSV only.
 SELECT * FROM levelplay_report ORDER BY ab_group,level;
 SELECT * FROM loss_report ORDER BY ab_group,level;
+SELECT * FROM loss_all_attempts_report ORDER BY ab_group,level;
