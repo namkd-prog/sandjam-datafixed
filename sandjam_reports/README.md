@@ -17,6 +17,8 @@ python run_reports.py --input /path/to/raw_fixed --output /path/to/sandjam_outpu
 4. Thành công phải in `COMPLETE`, có 3 CSV + Excel3 tab + `data_readme.md` + `manifest.json` với `status=complete`. Nếu thiếu cột mode_fixed/cutoff, quay lại output process của Nam; **không tự tạo mode_fixed từ raw mode để vượt kiểm tra**.
 5. D7 của report 02–05/10 đang N/A vì chưa đủ tuổi; không đổi thành 0. Hai caveat công thức cần giữ khi bàn giao: Loss Churn là reconstruction khớp ảnh, mẫu số ads theo property là candidate; chi tiết ở data_readme.
 
+JSON NULL/rỗng/sai cú pháp **không chặn job**, không cần lọc/xóa các dòng `app_loading` thiếu params. Runner đọc giá trị không parse được thành NULL, giữ dòng và Parquet gốc; không quét toàn history để kiểm JSON. Các kiểm tra schema, timestamp, coverage và corrected mode vẫn giữ.
+
 ## Input, cấu hình và output
 
 `--input` nhận thư mục có partition/subfolder, một file Parquet hoặc glob được quote. Ví dụ `--input '/data/raw_fixed/**/*.parquet'`. Đưa **toàn bộ raw_fixed** vào; không pre-filter chỉ gameplay classic, AB hoặc02–05/10 vì cần session dùng observation và cutoff cho ads/IAP. Map/Struct JSON columns được chuyển về JSON string trong lúc đọc. GA4 key/value array cần adapter, runner báo lỗi rõ.

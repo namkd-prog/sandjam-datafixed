@@ -2,23 +2,25 @@
   "status": "ready_for_DE_local_corrected_parquet",
   "created_at_utc": "2026-10-07T09:56:18.896158+00:00",
   "corrected_real_data_run": false,
-  "local_tests": "4 passed, including portable copy outside workspace",
+  "local_tests": "5 passed; includes NULL/empty/malformed JSON and preserving session activity",
   "sha256": {
     ".gitignore": "689b54badb511355128d8d5c419347fdef40bc5d502387504900b436a7a4c9e3",
-    "README.md": "3a1ece639d2d833570bc7d5e5d4ab72a20fe0c86046de1e312256d42194db76e",
+    "README.md": "6402933a3a24b6280603150132eb8db68f84c3dd1d8b298aabca9dfb2fa3ce4b",
     "config.json": "72838a0e5f4b9b0caeb3bc04a9d039f86c3201ecbf3a228c5da14c92d54b33fa",
-    "data_readme.md": "de3102db2a1dc6b54da329d1d87fdf0896b33dc64268cf810e175266248330d3",
+    "data_readme.md": "064244d60a12b6cca62433eef5c1ed373734f908b983b67b2aff6340b85871df",
     "lib/__init__.py": "4ea4fe20a4b8ddfd8b2e3144ef7c60b8770e696bf7a27b9d9222f4d7de6537af",
     "lib/sql_statements.py": "488276372d58dbcf556b97b2f6de6512f70ca00e0b4964a90d77edab2fe2424c",
     "qa_summary.json": "c70f22bcce8a58d68b29d6cccf00a3091c37f18c1ff43cd4c290ba10b6076ee8",
     "requirements.txt": "047caff8388c03c0b91911c72c1c64ac60de5ee03fac4a970205322dda15b931",
-    "run_reports.py": "f2bc17180e8430c50ffa1e01904216422d454cb16a24a4a1a612698a6a52ad8c",
+    "run_reports.py": "75e3339d67a69e88a63122e924f0f762ec444ac57301daf8441cc6682a8000f4",
     "sql/00_normalize.sql": "f3f9b37f57dbc243f4f5c073529c2bac7e94bf3518beba72dc26cb9b2310f44f",
     "sql/01_starts_and_ads.sql": "bb782f6f6afc6529349e6de25b014977e763b98fe6eb6f1f328d235d1b8a703d",
     "sql/02_completion_resources.sql": "c1247964be726ca63c6fddf5fd0097dc8bb9fa81a9f4065c2e238a1e2011a907",
     "sql/03_non_return.sql": "4c81fcdade123c4e9cf54b2eca88365f45582fc93c288befd1a42ee33616ac97",
     "sql/04_loss.sql": "d5c282232116178b09fb79cffa3990ea651d75bb6985e5d7cd9dd2b048b240ca",
     "sql/05_reports.sql": "38e85e6d28283104f6c1983bc4489ff0649255e021e06a7ce6d21621292011c7",
-    "tests/test_reports.py": "68b394c1392f658025766756c8f4e7bbf2404cb77870a33c582e5fbc698134e8"
-  }
+    "tests/test_reports.py": "1a84e8ddeedf7bbd940394bf556aa3e7289cec236d9da63075118d7e9b1c90fc"
+  },
+  "updated_at_utc": "2026-10-07T10:28:45.176903+00:00",
+  "json_policy": "tolerant_null_no_global_gate"
 }

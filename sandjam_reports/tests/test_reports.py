@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 import run_reports as reports
 
 
-def fixture(path, bad_fix=False, missing_mode=False, nested=False):
+def fixture(path, bad_fix=False, missing_mode=False, nested=False, nullable_json=False):
     import duckdb
     con = duckdb.connect()
     con.execute('''CREATE TABLE fixture(app_id VARCHAR,user_pseudo_id VARCHAR,event_ts TIMESTAMP,
@@ -50,6 +50,18 @@ def fixture(path, bad_fix=False, missing_mode=False, nested=False):
     add('old', 'level_start', '2026-10-02', ab='1', mode='classic' if bad_fix else 'sl', cutoff=cutoff)
     add('old', 'paid_ad_impression', '2026-10-02', ab='1', mode=None, cutoff=cutoff, params=dict(ad_format='interstitial',mode=None))
     con.executemany('INSERT INTO fixture VALUES (?,?,?,?,?,?,?,?,?,?,?)', rows)
+    if nullable_json:
+        # An actual activity event must survive missing params/properties.
+        con.execute("UPDATE fixture SET event_params=NULL, user_properties=NULL WHERE event_name='session_start'")
+        # Irrelevant app_loading rows: historical/in-window NULL, empty and malformed JSON.
+        con.execute('''INSERT INTO fixture
+            SELECT app_id,user_pseudo_id,ts,'app_loading',ep,up,mode_fixed,
+                   first_clear_650_ts,app_version,country,platform
+            FROM (SELECT * FROM fixture WHERE event_name='level_start' LIMIT 1) f
+            CROSS JOIN (VALUES
+                (TIMESTAMP '2026-05-01',NULL::VARCHAR,NULL::VARCHAR),
+                (TIMESTAMP '2026-10-02','', '{bad json'),
+                (TIMESTAMP '2026-10-02',NULL::VARCHAR,'{}')) x(ts,ep,up)''')
     columns = '* EXCLUDE(mode_fixed)' if missing_mode else '*'
     if nested:
         schemas=con.execute('SELECT json_group_structure(event_params::JSON), json_group_structure(user_properties::JSON) FROM fixture').fetchone()
@@ -109,6 +121,25 @@ class ReportsTest(unittest.TestCase):
             self.assertEqual(manifest['status'],'complete')
             self.assertEqual(len(list(dest.glob('*.csv'))),3)
             self.assertNotIn('fake_', (dest/'data_readme.md').read_text())
+
+    def test_null_and_malformed_json_keep_rows_and_activity(self):
+        import duckdb
+        with tempfile.TemporaryDirectory() as tmp1,tempfile.TemporaryDirectory() as tmp2:
+            baseline=self.execute(tmp1)
+            tolerant=self.execute(tmp2,nullable_json=True)
+            for filename,_,_ in reports.OUTPUTS.values():
+                self.assertEqual((baseline/filename).read_bytes(),(tolerant/filename).read_bytes())
+            qa=json.loads((tolerant/'manifest.json').read_text())['source_qa']
+            self.assertEqual(qa['json_policy'],'tolerant_null_no_global_gate')
+            self.assertNotIn('invalid_json',qa)
+            con=duckdb.connect()
+            cfg=json.loads((ROOT/'config.json').read_text())
+            args=SimpleNamespace(input=str(Path(tmp2)/'raw_fixed.parquet'))
+            reports.prepare_input(con,args,cfg)
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM raw_fixed_input').fetchone()[0],qa['rows'])
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM raw_fixed_input WHERE event_name='app_loading'").fetchone()[0],3)
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM raw_fixed_input WHERE event_name='session_start' AND event_params IS NULL AND user_properties IS NULL").fetchone()[0],1)
+            con.close()
 
     def test_input_must_be_corrected(self):
         for kwargs in (dict(missing_mode=True),dict(bad_fix=True)):

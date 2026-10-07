@@ -107,7 +107,8 @@ def prepare_input(con, args, cfg):
             if typ.startswith(('STRUCT', 'MAP')):
                 expr = 'to_json(' + quoted + ')::VARCHAR'
             elif typ in ('VARCHAR', 'JSON'):
-                expr = quoted + '::VARCHAR'
+                # Missing/malformed JSON is read as NULL; preserve the input row.
+                expr = 'TRY_CAST(' + quoted + ' AS JSON)::VARCHAR'
             else:
                 raise ValueError(name + ' cần JSON string/Map/Struct; GA4 arrays cần adapter.')
         elif name in ('event_ts', 'first_clear_650_ts'):
@@ -118,13 +119,11 @@ def prepare_input(con, args, cfg):
     con.execute('CREATE TEMP VIEW raw_fixed_input AS SELECT ' + ','.join(selected) + ' FROM parquet_source')
     check = con.execute(f'''SELECT COUNT(*) AS rows,
       COUNT(*) FILTER (WHERE event_ts IS NULL) AS invalid_timestamp,
-      COUNT(*) FILTER (WHERE NOT COALESCE(json_valid(event_params),false)
-                           OR NOT COALESCE(json_valid(user_properties),false)) AS invalid_json,
       MIN(DATE(event_ts+INTERVAL 7 HOURS)),MAX(DATE(event_ts+INTERVAL 7 HOURS))
       FROM raw_fixed_input WHERE app_id={literal(cfg['app_id'])}''').fetchone()
-    if not check[0] or check[1] or check[2]:
-        raise ValueError(f'Input rỗng hoặc không hợp lệ: rows={check[0]}, invalid_timestamp={check[1]}, invalid_json={check[2]}.')
-    if str(check[3]) > cfg['report_start'] or str(check[4]) < cfg['observation_end']:
+    if not check[0] or check[1]:
+        raise ValueError(f'Input rỗng hoặc timestamp không hợp lệ: rows={check[0]}, invalid_timestamp={check[1]}.')
+    if str(check[2]) > cfg['report_start'] or str(check[3]) < cfg['observation_end']:
         raise ValueError('Input không phủ report/observation_end. Cần toàn bộ raw_fixed, gồm session tới observation_end.')
     bad_fix = con.execute(f'''SELECT COUNT(*) FROM raw_fixed_input
       WHERE app_id={literal(cfg['app_id'])} AND COALESCE(mode_fixed,'')<>'sl'
@@ -132,8 +131,9 @@ def prepare_input(con, args, cfg):
       AND event_ts>first_clear_650_ts''').fetchone()[0]
     if bad_fix:
         raise ValueError(f'Có {bad_fix} event original classic sau cutoff nhưng mode_fixed chưa là sl; kiểm lại bước process của Nam.')
-    return dict(rows=check[0], min_date=str(check[3]), max_date=str(check[4]),
-                invalid_timestamp=check[1], invalid_json=check[2], inconsistent_mode_fix=bad_fix,
+    return dict(rows=check[0], min_date=str(check[2]), max_date=str(check[3]),
+                invalid_timestamp=check[1], json_policy='tolerant_null_no_global_gate',
+                inconsistent_mode_fix=bad_fix,
                 input_schema={k: types[k] for k in sorted(REQUIRED)})
 
 
@@ -212,6 +212,7 @@ def data_readme(cfg, source_qa, outputs, windows):
 App `{cfg['app_id']}`. Report **{cfg['report_start']}–{cfg['report_end']}**, ngày UTC+7, bao gồm hai biên.
 Input là **Parquet raw_fixed đã được process của Nam sửa**, không đọc/query StarRocks. Gameplay lọc `mode_fixed='classic'`;
 ads/IAP lấy `user_properties.mode` và áp cùng `first_clear_650_ts` để loại classic sau cutoff. Không sửa JSON hay level ID.
+JSON NULL/rỗng/sai cú pháp không chặn job: khi đọc, giá trị không parse được trở thành NULL; giữ nguyên dòng và Parquet gốc. Không quét toàn history để kiểm JSON. Metric cần field nào thì áp điều kiện field đó; session vẫn được giữ theo logic observation.
 Chia theo `firebase_exp_abt_22`, nhóm 0/1/2. Version: {', '.join(cfg['versions']) or 'mọi version'}. **Mọi level**, không giới hạn1–200.
 
 | File / tab Excel | Nội dung |
