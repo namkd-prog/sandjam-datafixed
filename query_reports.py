@@ -1,8 +1,8 @@
 """Run the single consolidated Spark SQL script against the corrected Parquet export."""
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from sql_statements import split_sql
 
 
 def run(spark,args):
@@ -30,10 +30,12 @@ def run(spark,args):
              args.level_min,args.level_max,args.versions.split(','),args.balance_resources.split(','))]
     spark.createDataFrame(config,'report_start date, report_end date, as_of_date date, observation_end date, level_min int, level_max int, versions array<string>, coin_balance_resources array<string>').createOrReplaceTempView('report_config')
     sql=Path(__file__).with_name('levelplay_and_loss.sql').read_text(encoding='utf-8')
-    # This maintained script has no semicolons inside SQL string literals.
-    for statement in sql.split(';'):
-        if statement.strip():
+    for number,statement in enumerate(split_sql(sql),1):
+        print(f'Executing SQL statement {number}: {statement.splitlines()[0]}',flush=True)
+        try:
             spark.sql(statement)
+        except Exception as exc:
+            raise RuntimeError(f'SQL statement {number} failed:\n{statement}\n') from exc
     for name in ('levelplay_report','loss_report'):
         result=spark.table(name).orderBy('ab_group','level')
         result.write.mode('errorifexists').parquet(args.output.rstrip('/')+'/'+name)
@@ -48,7 +50,7 @@ if __name__=='__main__':
     p.add_argument('--output',required=True)
     p.add_argument('--start',default='2026-10-02')
     p.add_argument('--end',default='2026-10-05')
-    p.add_argument('--as-of',default=datetime.now(ZoneInfo('Asia/Bangkok')).strftime('%Y-%m-%d'))
+    p.add_argument('--as-of',default=datetime.now(timezone(timedelta(hours=7))).strftime('%Y-%m-%d'))
     p.add_argument('--observation-end',help='Last COMPLETE source date in UTC+7')
     p.add_argument('--level-min',type=int,default=1)
     p.add_argument('--level-max',type=int,default=200)

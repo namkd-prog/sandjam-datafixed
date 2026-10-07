@@ -6,7 +6,9 @@
 spark-submit query_reports.py --input s3a://YOUR_BUCKET/exports/raw_mode_run1/raw_fixed --output s3a://YOUR_BUCKET/reports/ab_run1 --observation-end 2026-10-06
 ```
 
-Đặt `--observation-end` là ngày nguồn đã đủ, theo UTC+7. Không coi có một event vào ngày đó là nguồn đã hoàn chỉnh. Ngày `--as-of` mặc định là ngày chạy UTC+7. Có thể chỉ định để tái lập kết quả. Python cần zoneinfo (Python >=3.9 và timezone data trên máy/cluster).
+Đặt `--observation-end` là ngày nguồn đã đủ, theo UTC+7. Không coi có một event vào ngày đó là nguồn đã hoàn chỉnh. Ngày `--as-of` mặc định là ngày chạy UTC+7. Có thể chỉ định để tái lập kết quả.
+
+Đây là **Spark SQL, không dán vào StarRocks**. Runner cần cùng thư mục với `levelplay_and_loss.sql` và `sql_statements.py`. Nó tự tạo raw_fixed_input/report_config. Nếu chạy trên StarRocks phải chuyển dialect và thay nguồn bằng bảng/view StarRocks, kèm tính cutoff mode từ raw gốc nếu bảng chưa có mode_fixed.
 
 Mặc định app id6758755718, ngày 02–05/10/2026, experiment firebase_exp_abt_22, groups 0/1/2, version 0.6.3–0.6.7, level 1–200. Dùng `--level-max 650` nếu cần toàn bộ classic. Script đọc thêm level tiếp theo ở biên range cho drop rate. Coin Balance mặc định resources=[coin]; thay `--balance-resources coin,ticket` nếu bộ lọc BI chọn những resource đó. Total Balance cộng mọi key hợp lệ theo tài liệu, không dùng chung công thức với Coin Balance.
 
